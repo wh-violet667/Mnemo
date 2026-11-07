@@ -427,7 +427,7 @@ DEFAULTS = {
     "memory_count": 0,
     "memory_error": "",
     "active_stream": None,
-    "retrieval_mode": "auto",
+    "retrieval_mode": "fast",
     "history_loaded_for": None,
     "confirm_delete_kb": False,
     "confirm_delete_chat": False,
@@ -753,7 +753,7 @@ def _start_stream(text: str, append_user: bool) -> None:
         knowledge_base_id=st.session_state.selected_kb,
         conversation_id=st.session_state.conversation_id,
         previous_messages=previous_messages,
-        retrieval_mode=st.session_state.get("retrieval_mode", "auto"),
+        retrieval_mode=st.session_state.get("retrieval_mode", "fast"),
     )
     st.session_state.active_stream = session
     session.start()
@@ -998,7 +998,7 @@ def render_composer() -> None:
     )
     st.segmented_control(
         "检索模式",
-        options=["auto", "fast", "deep"],
+        options=["fast", "auto", "deep"],
         format_func=lambda m: {"auto": "自动", "fast": "快速", "deep": "深入"}[m],
         key="retrieval_mode",
         label_visibility="collapsed",

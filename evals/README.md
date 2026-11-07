@@ -74,5 +74,5 @@ python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode au
 
 - 只测检索层，不测最终回答是否忠实；答案质量建议加 LLM judge 或人工抽检 20 条。
 - 评测语料是合成/小规模数据，真实业务文档需要重新标 golden set。
-- Agentic-lite 当前没有证明质量增益；默认 `auto` 需要按场景评估，追求延迟可改 `fast`。
+- Agentic-lite 当前没有证明质量增益；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
 - 修改分块参数需要重建索引，分块消融请另开 collection 或用独立脚本。

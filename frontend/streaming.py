@@ -24,7 +24,7 @@ class StreamSession:
         knowledge_base_id: str,
         conversation_id: str,
         previous_messages: List[Dict[str, Any]],
-        retrieval_mode: str = "auto",
+        retrieval_mode: str = "fast",
     ) -> None:
         self.query = query
         self.knowledge_base_id = knowledge_base_id

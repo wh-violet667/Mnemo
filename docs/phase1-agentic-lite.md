@@ -13,7 +13,7 @@
 
 在不破坏现有 fast 路径的前提下，为知识库检索增加可控的多轮反思能力：
 
-- 新增 `retrieval_mode`：`fast / auto / deep`，默认 `auto`；
+- 新增 `retrieval_mode`：`fast / auto / deep`，默认 `fast`；
 - `fast`：一次 hybrid + rerank，不升级；
 - `deep`：Plan → Retrieve → Critique → Refine，最多 2 轮；
 - `auto`：规则判断 + fast 无结果时升级一次；
@@ -204,7 +204,7 @@ async def run_retrieval(
     user_id: int,
     knowledge_base_id: str,
     top_k: int,
-    mode: str = "auto",
+    mode: str = "fast",
     start_index: int = 1,
     max_rounds: int = 2,
     budget_ms: int = 12000,
@@ -267,7 +267,7 @@ Critic 提示词输出：
 ```python
 @tool("search_knowledge_base")
 async def search_knowledge_base(query: str, runtime: ToolRuntime[ContextSchema]) -> str:
-    mode = runtime.context.retrieval_mode or "auto"
+    mode = runtime.context.retrieval_mode or "fast"
     result = await run_retrieval(
         query,
         user_id=runtime.context.user_id,
@@ -300,7 +300,7 @@ async def search_knowledge_base(query: str, runtime: ToolRuntime[ContextSchema])
 
 ### 4.5 `backend/agent.py`（修改）
 
-- `stream_agent_response` 增加 `retrieval_mode: str = "auto"`；
+- `stream_agent_response` 增加 `retrieval_mode: str = "fast"`；
 - 构造 `ContextSchema` 时传入；
 - custom 流处理：
 
@@ -335,7 +335,7 @@ async def chat_with_agent(
     knowledge_base_id: str,
     user_id: int,
     conversation_id: str = "default",
-    retrieval_mode: Literal["auto", "fast", "deep"] = "auto",
+    retrieval_mode: Literal["auto", "fast", "deep"] = "fast",
     ...
 ):
     ...
@@ -357,7 +357,7 @@ class ContextSchema:
     knowledge_base_id: str
     top_k: int = 5
     conversation_id: str = "default"
-    retrieval_mode: str = "auto"
+    retrieval_mode: str = "fast"
     sources: List[Dict[str, Any]] = field(default_factory=list)
 ```
 
@@ -373,7 +373,7 @@ class ContextSchema:
 
 ### 4.8 `frontend/app.py`（修改）
 
-- `session_state` 增加 `retrieval_mode`，默认 `"auto"`；
+- `session_state` 增加 `retrieval_mode`，默认 `"fast"`；
 - 发送框上方或下方增加三档选择；
 - `_start_stream` 把 `st.session_state.retrieval_mode` 传给 `StreamSession`；
 - 回答结束后，如果 `trace` 存在，展示：
@@ -556,7 +556,7 @@ else:
 ```env
 # Agentic-lite
 AGENTIC_ENABLED=true
-AGENTIC_DEFAULT_MODE=auto
+AGENTIC_DEFAULT_MODE=fast
 AGENTIC_MAX_ROUNDS=2
 AGENTIC_TIMEOUT_MS=12000
 AGENTIC_MAX_QUERIES=3
@@ -576,7 +576,7 @@ AGENTIC_MAX_QUERIES=3
 
 `AGENTIC_DEFAULT_MODE` 的消费点：**只在 `api.py`**。端点的 `retrieval_mode` 默认值不设字面量，
 而是在请求未显式传参时回落到该环境变量；`agent.py` / `schemas.py` 一律以调用方传入值为准，
-不再各自硬编码 `"auto"`，避免多处默认值不一致。
+不再各自硬编码 `"fast"`，避免多处默认值不一致。
 
 ---
 
@@ -630,7 +630,7 @@ AGENTIC_MAX_QUERIES=3
 - 启动后端，`retrieval_mode=fast` 对话正常；
 - `retrieval_mode=deep` 返回 trace，rounds ≤ 2；
 - 非法 mode 返回 422；
-- 旧前端不带 mode 时默认 auto；
+- 旧前端不带 mode 时默认 fast；
 - `sources` 仍只发一次，编号与 answer 引用一致。
 
 ### 9.3 回归
@@ -707,7 +707,7 @@ AGENTIC_MAX_QUERIES=3
 不达标时：
 
 - 保留 `deep` 作为可选能力；
-- 默认仍为 `fast` 或 `auto`，不强行推广。
+- 默认使用 `fast`；需要多轮时显式选择 `auto` / `deep`。
 
 ---
 
@@ -748,7 +748,7 @@ AGENTIC_MAX_QUERIES=3
 
 - `AGENTIC_ENABLED=false` 直接回 fast；
 - 前端隐藏三档选择即可；
-- API 保留 `retrieval_mode`，默认 auto，不影响旧客户端。
+- API 保留 `retrieval_mode`，默认 fast，不影响旧客户端。
 
 ---
 
@@ -757,7 +757,7 @@ AGENTIC_MAX_QUERIES=3
 1. 是否接受“单工具内部模式”，不新增 `deep_search_knowledge_base`？
 2. `auto` 第一版只做规则 + 无结果升级，是否接受？
 3. planner/critic 使用 `SUMMARIZATION_MODEL`，是否接受？
-4. 默认模式用 `auto` 还是 `fast`？
+4. 默认模式已改为 `fast`；需要多轮时显式选择 `auto` / `deep`。
 5. 评测集先做 24-30 条，还是直接 40-60 条？
 6. 是否接受第一版只改 `app.py` / `streaming.py`，不拆 `state.py` / `components.py`？
 7. `deep` 的 max_rounds 默认 2，是否接受？

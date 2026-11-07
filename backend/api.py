@@ -675,7 +675,7 @@ async def chat_with_agent(
 
     conversation_id 用于隔离上下文；同一个用户的不同会话各自拥有独立的
     Redis checkpoint（thread_id = user_id:conversation_id）。
-    retrieval_mode 缺省时回落到 AGENTIC_DEFAULT_MODE 环境变量（默认 auto）。
+    retrieval_mode 缺省时回落到 AGENTIC_DEFAULT_MODE 环境变量（默认 fast）。
     """
     try:
         conversation_id = normalize_conversation_id(conversation_id)

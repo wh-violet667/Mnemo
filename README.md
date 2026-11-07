@@ -68,7 +68,7 @@ Mnemo 围绕这两点做了四件事：
 - deep 的 P95 约 11-12 秒，auto 约 7.6-8.4 秒，约是 fast 的 3-5 倍；
 - violet 上 fast 的 MRR（0.849）略高于 baseline（0.832），但 deep / auto 未继续提升；
 - 因此当前 Agentic-lite 的价值是**可控的多轮轨迹和可观测性**，不是已经被数据证明的质量提升。阶段 1 计划的“多跳 Recall +10pp”门槛在当前评测集上**没有达成**；
-- 如果更看重延迟，可设置 `AGENTIC_DEFAULT_MODE=fast`；`auto` 仍是代码默认值，但需要根据场景评估。
+- 当前默认模式已改为 `fast`；需要多轮反思时显式选择 `auto` 或 `deep`，并按场景评估延迟与收益。
 
 复现方式见 [检索评测](#检索评测)。
 
@@ -220,11 +220,11 @@ Agentic-lite：多轮反思封装在 `search_knowledge_base` 工具内部，对 
 
 | 模式 | 行为 | 适用 |
 |---|---|---|
-| `fast` | 一次 hybrid + 统一 rerank，绝不升级 | 简单单跳 |
+| `fast`（默认） | 一次 hybrid + 统一 rerank，绝不升级 | 简单单跳、追求低延迟 |
+| `auto` | 规则命中复杂特征走 deep；否则先 fast，0 父块时在请求内升级一次 deep | 需要自动分流时 |
 | `deep` | Plan → Retrieve → Critique → Refine，最多 2 轮，统一 rerank 一次 | 比较/版本/多实体等复杂问题 |
-| `auto`（默认） | 规则命中复杂特征走 deep；否则先 fast，0 父块时在请求内升级一次 deep | 日常默认 |
 
-- 轮次/预算上限与开关由环境变量控制：`AGENTIC_ENABLED`（false 时 deep/auto 降级 fast）、`AGENTIC_DEFAULT_MODE`（默认 auto）、`AGENTIC_MAX_ROUNDS`（默认 2，上限 3）、`AGENTIC_TIMEOUT_MS`（默认 12000）、`AGENTIC_MAX_QUERIES`（默认 3）。
+- 轮次/预算上限与开关由环境变量控制：`AGENTIC_ENABLED`（false 时 deep/auto 降级 fast）、`AGENTIC_DEFAULT_MODE`（默认 fast）、`AGENTIC_MAX_ROUNDS`（默认 2，上限 3）、`AGENTIC_TIMEOUT_MS`（默认 12000）、`AGENTIC_MAX_QUERIES`（默认 3）。
 - planner / critic 使用 `SUMMARIZATION_MODEL`（低成本），不让主模型三次调用。
 - 每次检索附 `trace` 流式事件（模式、轮次、证据数、耗时），前端回答下方展示"本次：深入 · 2 轮 · 8 条证据"；旧前端忽略该事件也能正常工作。
 - 达到轮次或预算上限时仍返回已有证据并提示"证据可能不足"，不会返回空答案。
@@ -298,9 +298,9 @@ RERANK_MODEL=qwen3-rerank
 Milvus_url=https://in03-xxxx.serverless.ali-cn-hangzhou.cloud.zilliz.com.cn
 Token=...
 
-# Agentic-lite（可选；默认 auto）
+# Agentic-lite（可选；默认 fast）
 AGENTIC_ENABLED=true
-AGENTIC_DEFAULT_MODE=auto
+AGENTIC_DEFAULT_MODE=fast
 AGENTIC_MAX_ROUNDS=2
 AGENTIC_TIMEOUT_MS=12000
 AGENTIC_MAX_QUERIES=3
@@ -408,7 +408,7 @@ python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode au
 python -m pytest -q
 ```
 
-当前 58 个测试（含参数化），覆盖：
+当前 60 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
 - Recall@k / MRR / 分位数
@@ -460,7 +460,7 @@ Mnemo/
 │   ├── golden_violet.jsonl      # 50 条真实语料评测（需外部语料）
 │   ├── run_eval.py              # baseline/fast/deep/auto 评测
 │   └── README.md
-├── tests/                       # pytest（58 个测试）
+├── tests/                       # pytest（60 个测试）
 ├── scripts/                     # WSL/Docker 安装、Agentic 冒烟
 │   ├── 01-enable-wsl.*
 │   ├── 02-install-docker.ps1
@@ -474,7 +474,7 @@ Mnemo/
 
 - **单用户演示**：`MNEMO_USER_ID` 默认 1，没有登录和租户隔离，不能直接公开部署。
 - **评测集仍偏合成**：30 条基础集 + 33 条 Agentic 集规模有限；`golden_violet` 的 50 条真实语料需要外部 `rag data/violet-evergarden-kb`，默认复现路径不包含它。
-- **Agentic 未显示质量增益**：在现有两套评测集上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 2-4 倍；默认 `auto` 需要按场景评估，追求延迟可改用 `fast`。
+- **Agentic 未显示质量增益**：在现有两套评测集上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 3-5 倍；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
 - **路由仍有误判**：`auto` 在 violet 50 条中有 2 条单跳问题被路由到 deep；需要更多路由测试集再调规则。
 - **没有 CI**：目前依靠本地 pytest 和手动评测，没有 GitHub Actions 门禁。
 - **前端仍以单文件为主**：请求流已拆到 `frontend/streaming.py`，但 `frontend/app.py` 仍承担约 1660 行 UI/CSS/状态，后续应继续拆分组件与状态。
@@ -488,9 +488,10 @@ Mnemo/
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace + 58 个测试
+- [x] Agentic-lite：fast / auto / deep + trace + 60 个测试
+- [x] 默认检索模式改为 `fast`，需要多轮时显式选择
 - [ ] Agentic 评测升级：更难多跳集、答案级 judge、critic 调优
-- [ ] 默认模式策略：根据评测决定 `auto` 还是 `fast`
+- [ ] 继续评估 `auto` 路由，若收益不足保持 `fast` 默认
 - [ ] 记忆 outbox：自动重试 Milvus 投影失败
 - [ ] LLM 冲突裁决：区分 ADD / UPDATE / NOOP
 - [ ] 记忆纠正：手动编辑内容或标记为过期

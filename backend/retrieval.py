@@ -79,9 +79,9 @@ def load_agentic_config() -> dict:
     enabled = os.getenv("AGENTIC_ENABLED", "true").strip().lower() in (
         "1", "true", "yes", "on",
     )
-    default_mode = os.getenv("AGENTIC_DEFAULT_MODE", "auto").strip().lower()
+    default_mode = os.getenv("AGENTIC_DEFAULT_MODE", "fast").strip().lower()
     if default_mode not in _VALID_MODES:
-        default_mode = "auto"
+        default_mode = "fast"
     return {
         "enabled": enabled,
         "default_mode": default_mode,
@@ -410,7 +410,7 @@ async def run_retrieval(
     user_id: int,
     knowledge_base_id: str,
     top_k: int,
-    mode: str = "auto",
+    mode: str = "fast",
     start_index: int = 1,
     max_rounds: int = 2,
     max_queries: int = 3,
@@ -428,7 +428,7 @@ async def run_retrieval(
     load_documents = load_documents or _default_load_documents(user_id, knowledge_base_id)
     rerank = rerank or _default_rerank(top_k)
 
-    requested = mode if mode in _VALID_MODES else "auto"
+    requested = mode if mode in _VALID_MODES else "fast"
     degraded = False
     if not enabled and requested in ("deep", "auto"):
         executed = "fast"

@@ -1,6 +1,6 @@
 import pytest
 
-from retrieval import run_retrieval
+from retrieval import load_agentic_config, run_retrieval
 
 
 class FakeRetriever:
@@ -410,4 +410,14 @@ async def test_deep_always_runs_first_round_even_when_planner_eats_budget():
 
     assert result.trace.rounds >= 1
     assert {doc["parent_id"] for doc in result.documents} == {"p1"}
+
+
+def test_default_agentic_mode_is_fast(monkeypatch):
+    monkeypatch.delenv("AGENTIC_DEFAULT_MODE", raising=False)
+    assert load_agentic_config()["default_mode"] == "fast"
+
+
+def test_invalid_agentic_mode_falls_back_to_fast(monkeypatch):
+    monkeypatch.setenv("AGENTIC_DEFAULT_MODE", "bogus")
+    assert load_agentic_config()["default_mode"] == "fast"
 
