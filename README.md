@@ -50,25 +50,56 @@ Mnemo 围绕这两点做了四件事：
 ## 架构
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Inter, Segoe UI, sans-serif", "fontSize": "14px", "lineColor": "#94a3b8", "primaryColor": "#eef4ff", "primaryTextColor": "#1e293b", "primaryBorderColor": "#93c5fd", "clusterBkg": "#f8fafc", "clusterBorder": "#e2e8f0"}}}%%
 flowchart LR
-    UI["Streamlit 前端<br/>8501"] -->|"HTTP / 逐行 JSON"| API["FastAPI<br/>8010"]
-    API --> AGENT["LangGraph Agent"]
+    subgraph client["客户端"]
+        UI["🖥️ Streamlit<br/>:8501"]
+    end
 
-    AGENT --> T1["search_knowledge_base"]
-    AGENT --> T2["get_memory"]
-    AGENT --> T3["get_raw_conversation"]
+    subgraph app["应用层"]
+        API["⚡ FastAPI<br/>:8010"]
+        AGENT["🧠 LangGraph Agent<br/>qwen-plus"]
+        T1["🔍 search_knowledge_base"]
+        T2["🧩 get_memory"]
+        T3["💬 get_raw_conversation"]
+    end
 
-    T1 --> MV[("Milvus<br/>子块 / 长期记忆")]
-    T1 --> PG[("PostgreSQL<br/>父块 / 元数据 / 对话")]
-    T2 --> MV
-    T3 --> PG
+    subgraph data["数据与索引"]
+        PG[("🗄️ PostgreSQL<br/>事实源<br/>memories · versions · sources<br/>parent_chunks · raw_conversations")]
+        MV[("📦 Milvus<br/>检索投影<br/>knowledge_base_collection<br/>memory_collection")]
+        RD[("⚡ Redis<br/>checkpoint · 画像缓存")]
+    end
 
-    AGENT -.-> RD[("Redis<br/>Checkpoint")]
-    T1 --> DS["DashScope<br/>Embedding / Rerank"]
-    AGENT --> LLM["DashScope<br/>qwen-plus"]
+    EXT["☁️ DashScope<br/>qwen-plus · embedding · rerank"]
+    BG["⏱️ 180s 记忆任务"]
 
-    BG["180s 后台记忆任务"] --> PG
-    BG --> MV
+    UI -->|"HTTP / 逐行 JSON"| API
+    API --> AGENT
+    AGENT --> T1
+    AGENT --> T2
+    AGENT --> T3
+
+    T1 -->|"子块召回"| MV
+    T2 -->|"active 记忆"| MV
+    T1 -->|"父块原文"| PG
+    T3 -->|"原始对话"| PG
+    PG -.->|"索引投影（可重建）"| MV
+    AGENT -.-> RD
+
+    T1 -->|"embedding / rerank"| EXT
+    T2 -->|"embedding"| EXT
+    AGENT -->|"生成"| EXT
+    BG -->|"Postgres 单事务"| PG
+    BG -.->|"Milvus 投影"| MV
+
+    classDef client fill:#eff6ff,stroke:#93c5fd,color:#1e3a8a
+    classDef app fill:#f5f3ff,stroke:#c4b5fd,color:#4c1d95
+    classDef data fill:#ecfdf5,stroke:#86efac,color:#065f46
+    classDef ext fill:#fff7ed,stroke:#fdba74,color:#9a3412
+    class UI client
+    class API,AGENT,T1,T2,T3 app
+    class PG,MV,RD data
+    class EXT,BG ext
 ```
 
 **一次对话的链路**
