@@ -1,10 +1,11 @@
 import asyncpg
 import logging
 import json
-from typing import List, Optional, Dict, Set
+from typing import Any, List, Optional, Dict, Set
 from dotenv import load_dotenv
 import os
 import asyncio
+import time
 import uuid
 from urllib.parse import unquote, urlparse
 from conversations import make_conversation_title, new_conversation_id
@@ -256,6 +257,79 @@ class PostgreSQLParentClient:
                         CREATE INDEX IF NOT EXISTS idx_summary_id ON raw_conversations(summary_id);
                         CREATE INDEX IF NOT EXISTS idx_raw_conversation ON raw_conversations(user_id, conversation_id, created_at);
                         CREATE INDEX IF NOT EXISTS idx_conversations_user_updated ON conversations(user_id, updated_at DESC);
+
+                        -- 8. 摘要表（每次记忆压缩批次的事实记录）
+                        CREATE TABLE IF NOT EXISTS summaries (
+                            summary_id VARCHAR(64) PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            thread_id VARCHAR(64) NOT NULL,
+                            conversation_id VARCHAR(64),
+                            content TEXT NOT NULL DEFAULT '',
+                            importance REAL DEFAULT 0.5,
+                            token_count INTEGER,
+                            message_count INTEGER,
+                            model VARCHAR(100),
+                            status VARCHAR(20) NOT NULL DEFAULT 'active',
+                            created_at BIGINT NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_summaries_user_created
+                            ON summaries(user_id, created_at DESC);
+
+                        -- 9. 记忆事实表（Postgres 是唯一事实源）
+                        CREATE TABLE IF NOT EXISTS memories (
+                            memory_id VARCHAR(64) PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            memory_type VARCHAR(30) NOT NULL,
+                            content TEXT NOT NULL,
+                            importance REAL DEFAULT 0.5,
+                            status VARCHAR(20) NOT NULL DEFAULT 'active',
+                            superseded_by VARCHAR(64),
+                            source_summary_id VARCHAR(64) REFERENCES summaries(summary_id) ON DELETE SET NULL,
+                            thread_id VARCHAR(64),
+                            conversation_id VARCHAR(64),
+                            embedding_model VARCHAR(100),
+                            embedding_dim INTEGER,
+                            index_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                            indexed_at TIMESTAMP,
+                            created_at BIGINT NOT NULL,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            deleted_at TIMESTAMP,
+                            last_access_at BIGINT DEFAULT 0
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_memories_user_status_type
+                            ON memories(user_id, status, memory_type);
+                        CREATE INDEX IF NOT EXISTS idx_memories_summary
+                            ON memories(source_summary_id);
+                        CREATE INDEX IF NOT EXISTS idx_memories_index_status
+                            ON memories(index_status);
+
+                        -- 10. 记忆版本表（只追加，不覆盖）
+                        CREATE TABLE IF NOT EXISTS memory_versions (
+                            version_id VARCHAR(64) PRIMARY KEY,
+                            memory_id VARCHAR(64) NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+                            content TEXT NOT NULL,
+                            importance REAL,
+                            status VARCHAR(20) NOT NULL,
+                            valid_from TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            valid_to TIMESTAMP,
+                            superseded_by VARCHAR(64),
+                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_memory_versions_memory
+                            ON memory_versions(memory_id, created_at DESC);
+
+                        -- 11. 记忆来源表（记忆 -> 原始消息）
+                        CREATE TABLE IF NOT EXISTS memory_sources (
+                            memory_id VARCHAR(64) NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+                            message_id VARCHAR(50) NOT NULL,
+                            conversation_id VARCHAR(64),
+                            summary_id VARCHAR(64),
+                            relation VARCHAR(20) NOT NULL DEFAULT 'derived_from',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (memory_id, message_id)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_memory_sources_message
+                            ON memory_sources(message_id);
                         """
                     )
                     # 为业务表创建索引，加速多表关联查询和过滤操作
@@ -1258,6 +1332,372 @@ class PostgreSQLParentClient:
         except Exception as e:
             logger.error(f"更新用户画像失败: {e}")
             return False
+
+    async def cache_user_profile(self, user_id: int, user_profile: str) -> None:
+        """把画像写入 Redis；缓存失败不影响 Postgres 事实源。"""
+
+        try:
+            redis_client = await get_redis_client()
+            await redis_client.setex(
+                f"user_profile:{user_id}", 3600, user_profile.strip()
+            )
+        except Exception as e:
+            logger.warning(f"更新用户画像缓存失败: {e}")
+
+    async def store_memory_batch(
+        self,
+        *,
+        user_id: int,
+        thread_id: str,
+        conversation_id: Optional[str],
+        summary_id: str,
+        summary_content: str,
+        summary_importance: float,
+        token_count: int,
+        message_count: int,
+        model_name: Optional[str],
+        memories: List[Dict[str, Any]],
+        superseded: List[Dict[str, str]],
+        message_ids: List[str],
+        user_profile: Optional[str],
+    ) -> bool:
+        """在一个 Postgres 事务里写入 summary、memory、version、source。
+
+        Milvus 只在事务提交后做索引投影，不再是事实源。
+        """
+
+        if not self.pool:
+            logger.error("Connection pool not initialized")
+            return False
+
+        if not memories:
+            return False
+
+        created_at = int(memories[0].get("created_at") or time.time())
+        summary_content = (summary_content or "").strip()
+
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    # 1. 摘要批次
+                    await conn.execute(
+                        """
+                        INSERT INTO summaries (
+                            summary_id, user_id, thread_id, conversation_id,
+                            content, importance, token_count, message_count,
+                            model, status, created_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10)
+                        ON CONFLICT (summary_id) DO NOTHING
+                        """,
+                        summary_id,
+                        user_id,
+                        thread_id,
+                        conversation_id,
+                        summary_content,
+                        float(summary_importance or 0.5),
+                        int(token_count),
+                        int(message_count),
+                        model_name,
+                        created_at,
+                    )
+
+                    # 2. 旧记忆标记为 superseded，并关闭它的开放版本
+                    for item in superseded:
+                        old_id = item.get("memory_id")
+                        new_id = item.get("superseded_by")
+                        if not old_id or not new_id:
+                            continue
+
+                        closed = await conn.fetch(
+                            """
+                            UPDATE memory_versions
+                            SET valid_to = NOW(), superseded_by = $1
+                            WHERE memory_id = $2 AND valid_to IS NULL
+                            RETURNING version_id
+                            """,
+                            new_id,
+                            old_id,
+                        )
+                        if not closed:
+                            old_row = await conn.fetchrow(
+                                """
+                                SELECT content, importance
+                                FROM memories
+                                WHERE memory_id = $1 AND user_id = $2
+                                """,
+                                old_id,
+                                user_id,
+                            )
+                            if old_row:
+                                await conn.execute(
+                                    """
+                                    INSERT INTO memory_versions (
+                                        version_id, memory_id, content, importance,
+                                        status, valid_from, valid_to, superseded_by
+                                    )
+                                    VALUES ($1, $2, $3, $4, 'superseded', NOW(), NOW(), $5)
+                                    """,
+                                    f"ver_{uuid.uuid4().hex}",
+                                    old_id,
+                                    old_row["content"],
+                                    old_row["importance"],
+                                    new_id,
+                                )
+
+                        await conn.execute(
+                            """
+                            UPDATE memories
+                            SET status = 'superseded',
+                                superseded_by = $1,
+                                updated_at = NOW(),
+                                index_status = 'pending'
+                            WHERE memory_id = $2
+                              AND user_id = $3
+                              AND status = 'active'
+                            """,
+                            new_id,
+                            old_id,
+                            user_id,
+                        )
+
+                    # 3. 新记忆 + 初始版本
+                    for mem in memories:
+                        memory_id = mem["memory_id"]
+                        content = mem["content"]
+                        importance = float(mem.get("importance", 0.5))
+                        await conn.execute(
+                            """
+                            INSERT INTO memories (
+                                memory_id, user_id, memory_type, content, importance,
+                                status, source_summary_id, thread_id, conversation_id,
+                                embedding_model, embedding_dim, index_status,
+                                created_at, last_access_at
+                            )
+                            VALUES (
+                                $1, $2, $3, $4, $5,
+                                'active', $6, $7, $8,
+                                $9, $10, 'pending',
+                                $11, $12
+                            )
+                            """,
+                            memory_id,
+                            user_id,
+                            mem["memory_type"],
+                            content,
+                            importance,
+                            mem.get("source_summary_id") or summary_id,
+                            thread_id,
+                            conversation_id,
+                            mem.get("embedding_model"),
+                            mem.get("embedding_dim"),
+                            int(mem.get("created_at") or created_at),
+                            int(mem.get("last_access_at") or created_at),
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO memory_versions (
+                                version_id, memory_id, content, importance,
+                                status, valid_from
+                            )
+                            VALUES ($1, $2, $3, $4, 'active', NOW())
+                            """,
+                            f"ver_{uuid.uuid4().hex}",
+                            memory_id,
+                            content,
+                            importance,
+                        )
+
+                    # 4. 记忆来源：每条记忆都能回到具体消息
+                    if message_ids:
+                        source_rows = [
+                            (mem["memory_id"], message_id, conversation_id, summary_id)
+                            for mem in memories
+                            for message_id in message_ids
+                        ]
+                        await conn.executemany(
+                            """
+                            INSERT INTO memory_sources (
+                                memory_id, message_id, conversation_id, summary_id
+                            )
+                            VALUES ($1, $2, $3, $4)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            source_rows,
+                        )
+
+                    # 5. 标记这批消息已压缩
+                    if message_ids:
+                        await conn.execute(
+                            """
+                            UPDATE raw_conversations
+                            SET summary_id = $1
+                            WHERE id = ANY($2::text[])
+                            """,
+                            summary_id,
+                            message_ids,
+                        )
+
+                    # 6. 画像与记忆在同一个事务里
+                    if user_profile and user_profile.strip():
+                        await conn.execute(
+                            """
+                            INSERT INTO users (user_id, user_profile, created_at, updated_at)
+                            VALUES ($1, $2, NOW(), NOW())
+                            ON CONFLICT (user_id) DO UPDATE SET
+                                user_profile = EXCLUDED.user_profile,
+                                updated_at = NOW()
+                            """,
+                            user_id,
+                            user_profile.strip(),
+                        )
+
+            if user_profile and user_profile.strip():
+                await self.cache_user_profile(user_id, user_profile)
+
+            logger.info(
+                "Postgres 记忆事务完成: user=%s summary=%s memories=%s sources=%s",
+                user_id,
+                summary_id,
+                len(memories),
+                len(memories) * len(message_ids),
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"写入记忆事务失败: {e}", exc_info=True)
+            return False
+
+    async def list_memories(
+        self,
+        user_id: int,
+        memory_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """从 Postgres 读取当前 active 记忆（前端记忆抽屉的事实源）。"""
+
+        if not self.pool:
+            return []
+
+        limit = max(1, min(int(limit), 200))
+        params: List[Any] = [user_id]
+        sql = """
+            SELECT memory_id AS id, memory_type, content, importance,
+                   source_summary_id AS summary_id, created_at, last_access_at
+            FROM memories
+            WHERE user_id = $1 AND status = 'active'
+        """
+        if memory_type:
+            params.append(memory_type)
+            sql += f" AND memory_type = ${len(params)}"
+        params.append(limit)
+        sql += f" ORDER BY created_at DESC LIMIT ${len(params)}"
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        return [
+            {
+                "id": str(row["id"]),
+                "memory_type": row["memory_type"],
+                "content": row["content"] or "",
+                "importance": row["importance"],
+                "summary_id": row["summary_id"],
+                "created_at": row["created_at"],
+                "last_access_at": row["last_access_at"],
+            }
+            for row in rows
+        ]
+
+    async def soft_delete_memory(self, memory_id: str, user_id: int) -> int:
+        """软删除：保留事实与版本，Milvus 状态由调用方同步。"""
+
+        if not self.pool:
+            return 0
+
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        """
+                        UPDATE memories
+                        SET status = 'deleted',
+                            deleted_at = NOW(),
+                            updated_at = NOW(),
+                            index_status = 'pending'
+                        WHERE memory_id = $1
+                          AND user_id = $2
+                          AND status <> 'deleted'
+                        RETURNING memory_id
+                        """,
+                        memory_id,
+                        user_id,
+                    )
+                    if not row:
+                        return 0
+
+                    await conn.execute(
+                        """
+                        UPDATE memory_versions
+                        SET valid_to = NOW()
+                        WHERE memory_id = $1 AND valid_to IS NULL
+                        """,
+                        memory_id,
+                    )
+                    return 1
+        except Exception as e:
+            logger.error(f"软删除记忆失败: {e}", exc_info=True)
+            return 0
+
+    async def mark_memories_index_status(
+        self, memory_ids: List[str], status: str
+    ) -> None:
+        """记录 Milvus 投影状态；失败不抛错，交给 reindex 修复。"""
+
+        if not self.pool or not memory_ids:
+            return
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE memories
+                    SET index_status = $1::varchar,
+                        indexed_at = CASE
+                            WHEN $1::text = 'indexed' THEN NOW()
+                            ELSE indexed_at
+                        END
+                    WHERE memory_id = ANY($2::varchar[])
+                    """,
+                    status,
+                    memory_ids,
+                )
+        except Exception as e:
+            logger.warning(f"更新索引状态失败: {e}")
+
+    async def get_memories_for_reindex(
+        self, user_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """读取全部记忆（含 superseded/deleted），供重建 Milvus 使用。"""
+
+        if not self.pool:
+            return []
+
+        sql = """
+            SELECT memory_id, user_id, memory_type, content, importance, status,
+                   source_summary_id, thread_id, conversation_id,
+                   embedding_model, embedding_dim, created_at, last_access_at
+            FROM memories
+        """
+        params: List[Any] = []
+        if user_id is not None:
+            sql += " WHERE user_id = $1"
+            params.append(user_id)
+        sql += " ORDER BY created_at ASC"
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        return [dict(row) for row in rows]
 
     async def get_raw_conversation_by_summary_id(
         self, summary_id: str, user_id: int

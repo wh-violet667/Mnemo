@@ -158,9 +158,11 @@ class AsyncMilvusClientWrapper:
             procedural_k=procedural_k,
         )
 
-    async def resolve_conflicts(self, filtered_memory: dict, user_id: int) -> dict:
-        """检测并过滤重复记忆 - 代理到 memory_manager"""
-        return await self.memory_manager.resolve_conflicts(filtered_memory, user_id)
+    async def find_superseded_candidates(
+        self, items: list[dict], user_id: int
+    ) -> tuple[dict, list[list[float]]]:
+        """找出应被替换的旧记忆 - 代理到 memory_manager"""
+        return await self.memory_manager.find_superseded_candidates(items, user_id)
 
     async def list_memories(
         self, user_id: int, memory_type: str = None, limit: int = 100
@@ -170,22 +172,15 @@ class AsyncMilvusClientWrapper:
             user_id=user_id, memory_type=memory_type, limit=limit
         )
 
-    async def delete_memory(self, memory_id: str, user_id: int) -> int:
-        """删除一条长期记忆 - 代理到 memory_manager"""
-        return await self.memory_manager.delete_memory(memory_id, user_id)
+    async def set_memory_status(self, memory_ids: list[str], status: str) -> bool:
+        """更新记忆状态 - 代理到 memory_manager"""
+        return await self.memory_manager.set_memory_status(memory_ids, status)
 
-    async def add_memories_batch(
-        self,
-        user_id: int,
-        thread_id: str,
-        memory_dict: dict,
-        summary_id: str = None,
-        **kwargs
+    async def index_memory_records(
+        self, records: list[dict], vectors: list[list[float]] | None = None
     ) -> bool:
-        """批量添加记忆 - 代理到 memory_manager"""
-        return await self.memory_manager.add_memories_batch(
-            user_id, thread_id, memory_dict, summary_id, **kwargs
-        )
+        """写入记忆投影 - 代理到 memory_manager"""
+        return await self.memory_manager.index_memory_records(records, vectors)
 
     # ==================== 知识库管理方法代理 ====================
 

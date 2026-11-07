@@ -13,6 +13,34 @@ logger = logging.getLogger(__name__)
 # 加载环境变量
 load_dotenv()
 
+SUPERSEDE_SIMILARITY = 0.9
+
+
+def select_superseded_candidates(
+    candidates: List[tuple[int, str, float]],
+    threshold: float = SUPERSEDE_SIMILARITY,
+) -> Dict[int, Dict[str, Any]]:
+    """同一条旧记忆只保留相似度最高的一条新记忆来替换。"""
+
+    ordered = sorted(
+        [
+            (item_idx, old_id, float(score))
+            for item_idx, old_id, score in candidates
+            if float(score) >= threshold
+        ],
+        key=lambda item: item[2],
+        reverse=True,
+    )
+
+    mapping: Dict[int, Dict[str, Any]] = {}
+    used_old_ids = set()
+    for item_idx, old_id, score in ordered:
+        if old_id in used_old_ids:
+            continue
+        used_old_ids.add(old_id)
+        mapping[item_idx] = {"memory_id": old_id, "score": score}
+    return mapping
+
 
 class MemoryManager:
     """记忆管理器 - 负责记忆的初始化、存储、更新、检索"""
@@ -30,8 +58,20 @@ class MemoryManager:
         self.dense_dim = dense_dim
 
     async def init_collection(self):
-        """初始化对话记忆集合"""
+        """初始化对话记忆集合。
+
+        Postgres 是事实源，Milvus 只保存可重建的检索投影，因此主键必须由
+        Postgres 生成（auto_id=False），否则无法做幂等 upsert 和 reindex。
+        """
         if await self.client.has_collection(self.collection_name):
+            desc = await self.client.describe_collection(self.collection_name)
+            fields = {field["name"]: field for field in desc["fields"]}
+            id_field = fields.get("id", {})
+            if id_field.get("auto_id") or "status" not in fields:
+                raise RuntimeError(
+                    f"集合 {self.collection_name} 是旧版 schema（auto_id=True 或缺少 status）。"
+                    "请先运行 backend/migrate_memory_v2.py 完成迁移，再启动后端。"
+                )
             logger.info(f"对话记忆集合 {self.collection_name} 已存在")
             await self.client.load_collection(self.collection_name)
             return
@@ -39,13 +79,13 @@ class MemoryManager:
         # 创建 Schema
         schema = self.client.create_schema(enable_dynamic_field=True)
 
-        # 主键
+        # 主键：由 Postgres 生成，Milvus 只做投影
         schema.add_field(
             field_name="id",
             datatype=DataType.VARCHAR,
-            max_length=50,
+            max_length=64,
             is_primary=True,
-            auto_id=True,
+            auto_id=False,
         )
 
         # 用户标识
@@ -61,6 +101,14 @@ class MemoryManager:
         # 记忆类型
         schema.add_field(
             field_name="memory_type", datatype=DataType.VARCHAR, max_length=30
+        )
+
+        # 记忆状态：active / superseded / deleted
+        schema.add_field(
+            field_name="status",
+            datatype=DataType.VARCHAR,
+            max_length=20,
+            default_value="active",
         )
 
         # 记忆内容
@@ -131,6 +179,7 @@ class MemoryManager:
         index_params.add_index(field_name="user_id", index_type="STL_SORT")
         index_params.add_index(field_name="thread_id", index_type="STL_SORT")
         index_params.add_index(field_name="memory_type", index_type="STL_SORT")
+        index_params.add_index(field_name="status", index_type="STL_SORT")
         index_params.add_index(field_name="importance", index_type="STL_SORT")
         index_params.add_index(field_name="last_access_at", index_type="STL_SORT")
         index_params.add_index(field_name="created_at", index_type="STL_SORT")
@@ -176,7 +225,13 @@ class MemoryManager:
         """混合检索，每种记忆类型并行检索、去重，返回召回的相似记忆内容"""
 
         memory_configs = {
-            key: {"k": k, "filter": f"user_id == {user_id} and memory_type == '{key}'"}
+            key: {
+                "k": k,
+                "filter": (
+                    f"user_id == {user_id} and memory_type == '{key}' "
+                    "and status == 'active'"
+                ),
+            }
             for key, k in {
                 "summary": summary_k,
                 "semantic": semantic_k,
@@ -430,85 +485,77 @@ class MemoryManager:
 
         return result
 
-    async def resolve_conflicts(self, filtered_memory: dict, user_id: int) -> dict:
-        """检测并删除重复记忆"""
-        items = []
+    SUPERSEDE_SIMILARITY = 0.9
 
-        for key in ["semantic_memory", "episodic_memory", "procedural_memory"]:
-            for idx, mem in enumerate(filtered_memory.get(key, [])):
-                items.append((key, idx, mem["content"], key.replace("_memory", "")))
+    async def find_superseded_candidates(
+        self,
+        items: List[Dict[str, Any]],
+        user_id: int,
+    ) -> tuple[Dict[int, Dict[str, Any]], List[List[float]]]:
+        """找出每条新记忆应替换的旧记忆，不删除任何数据。
 
-        if filtered_memory.get("summary"):
-            items.append(
-                ("summary", None, filtered_memory["summary"]["content"], "summary")
-            )
+        返回 ``(mapping, vectors)``：
+
+        - ``mapping``: ``{新记忆下标: {"memory_id": 旧记忆ID, "score": 相似度}}``
+        - ``vectors``: 与新记忆同序的 embedding，供后续写 Milvus 复用
+        """
 
         if not items:
-            return filtered_memory
+            return {}, []
 
-        vectors = await self.embeddings.aembed_documents([item[2] for item in items])
+        texts = [item["content"] for item in items]
+        vectors = await self.embeddings.aembed_documents(texts)
 
         from collections import defaultdict
 
-        type_to_items = defaultdict(list)
-        type_to_vectors = defaultdict(list)
+        type_to_pairs = defaultdict(list)
+        for idx, (item, vector) in enumerate(zip(items, vectors)):
+            type_to_pairs[item["memory_type"]].append((idx, vector))
 
-        for item, vec in zip(items, vectors):
-            mem_type = item[3]
-            type_to_items[mem_type].append(item)
-            type_to_vectors[mem_type].append(vec)
+        candidates = []
 
-        async def search_type(mem_type, type_items, type_vectors):
-            filter_expr = f"user_id == {user_id} and memory_type == '{mem_type}'"
+        async def search_type(mem_type, pairs):
+            indices = [pair[0] for pair in pairs]
+            type_vectors = [pair[1] for pair in pairs]
             results = await self.client.search(
                 collection_name=self.collection_name,
                 data=type_vectors,
                 anns_field="vector",
                 search_params={"metric_type": "COSINE", "params": {"ef": 64}},
                 limit=1,
-                filter=filter_expr,
-                output_fields=["distance"],
+                filter=(
+                    f"user_id == {user_id} and memory_type == '{mem_type}' "
+                    "and status == 'active'"
+                ),
+                output_fields=["id"],
             )
-            return [
-                results and results[i] and results[i][0]["distance"] >= 0.9
-                for i in range(len(type_items))
+            for local_idx, hits in enumerate(results):
+                if (
+                    hits
+                    and float(hits[0].get("distance", 0))
+                    >= self.SUPERSEDE_SIMILARITY
+                ):
+                    candidates.append(
+                        (
+                            indices[local_idx],
+                            str(hits[0]["id"]),
+                            float(hits[0]["distance"]),
+                        )
+                    )
+
+        await asyncio.gather(
+            *[
+                search_type(mem_type, pairs)
+                for mem_type, pairs in type_to_pairs.items()
             ]
+        )
 
-        tasks = [
-            search_type(t, type_to_items[t], type_to_vectors[t]) for t in type_to_items
-        ]
-        all_results = await asyncio.gather(*tasks)
-
-        is_similar_list = []
-        for results in all_results:
-            is_similar_list.extend(results)
-
-        to_remove = {
-            "semantic_memory": [],
-            "episodic_memory": [],
-            "procedural_memory": [],
-        }
-        clear_summary = False
-
-        for (key, idx, _, _), is_similar in zip(items, is_similar_list):
-            if not is_similar:
-                continue
-            if key == "summary":
-                clear_summary = True
-            elif idx is not None:
-                to_remove[key].append(idx)
-
-        for key, indices in to_remove.items():
-            if indices:
-                memories = filtered_memory[key]
-                for idx in sorted(indices, reverse=True):
-                    if idx < len(memories):
-                        del memories[idx]
-
-        if clear_summary:
-            filtered_memory["summary"] = {}
-
-        return filtered_memory
+        return (
+            select_superseded_candidates(
+                candidates, threshold=self.SUPERSEDE_SIMILARITY
+            ),
+            vectors,
+        )
 
     async def list_memories(
         self,
@@ -518,7 +565,7 @@ class MemoryManager:
     ) -> List[Dict[str, Any]]:
         """按用户读取长期记忆，供前端记忆抽屉展示。"""
 
-        filter_expr = f"user_id == {int(user_id)}"
+        filter_expr = f"user_id == {int(user_id)} and status == 'active'"
         if memory_type:
             filter_expr += f" and memory_type == '{memory_type}'"
 
@@ -554,100 +601,84 @@ class MemoryManager:
         memories.sort(key=lambda item: item.get("created_at") or 0, reverse=True)
         return memories
 
-    async def delete_memory(self, memory_id: str, user_id: int) -> int:
-        """删除一条记忆；过滤条件同时带 user_id，避免越权删除。"""
+    async def set_memory_status(self, memory_ids: List[str], status: str) -> bool:
+        """更新 Milvus 投影里的状态；只更新已存在的行。"""
 
-        result = await self.client.delete(
-            collection_name=self.collection_name,
-            filter=f'id == "{memory_id}" and user_id == {int(user_id)}',
-        )
-        if isinstance(result, dict):
-            return int(result.get("delete_count", 0))
-        return int(getattr(result, "delete_count", 0))
+        if not memory_ids:
+            return True
 
-    async def add_memories_batch(
+        quoted = ", ".join(f'"{memory_id}"' for memory_id in memory_ids)
+        try:
+            rows = await self.client.query(
+                collection_name=self.collection_name,
+                filter=f"id in [{quoted}]",
+                output_fields=["id"],
+            )
+            existing_ids = {str(row["id"]) for row in rows}
+            data = [
+                {"id": memory_id, "status": status}
+                for memory_id in memory_ids
+                if memory_id in existing_ids
+            ]
+            if data:
+                await self.client.upsert(
+                    collection_name=self.collection_name,
+                    data=data,
+                    partial_update=True,
+                )
+            return True
+        except Exception as e:
+            logger.error(f"更新 Milvus 记忆状态失败: {e}")
+            return False
+
+    async def index_memory_records(
         self,
-        user_id: int,
-        thread_id: str,
-        memory_dict: Dict[str, Any],
-        summary_id: Optional[str] = None,
-        **kwargs,
+        records: List[Dict[str, Any]],
+        vectors: Optional[List[List[float]]] = None,
     ) -> bool:
-        """批量添加记忆到 Milvus 集合"""
-        created_at = kwargs.get("created_at", int(time.time()))
-        last_access_at = kwargs.get("last_access_at", int(time.time()))
+        """把 Postgres 记忆投影到 Milvus（幂等 upsert）。"""
 
-        texts_to_embed = []
-        records_to_insert = []
+        if not records:
+            return True
 
-        summary = memory_dict.get("summary", {})
-        if summary and summary.get("content", "").strip():
-            content = summary["content"].strip()
-            texts_to_embed.append(content)
-            records_to_insert.append(
+        if vectors is None:
+            vectors = await self.embeddings.aembed_documents(
+                [record["content"] for record in records]
+            )
+
+        if len(vectors) != len(records):
+            raise ValueError("vectors 数量与 records 不一致")
+
+        data = []
+        for record, vector in zip(records, vectors):
+            data.append(
                 {
-                    "user_id": user_id,
-                    "thread_id": thread_id,
-                    "memory_type": "summary",
-                    "content": content,
-                    "summary_id": summary_id,
-                    "importance": float(summary.get("importance_score", 0.5)),
-                    "created_at": created_at,
-                    "last_access_at": last_access_at,
+                    "id": str(record["memory_id"]),
+                    "user_id": int(record["user_id"]),
+                    "thread_id": record.get("thread_id") or "",
+                    "memory_type": record["memory_type"],
+                    "content": record["content"],
+                    "summary_id": record.get("source_summary_id")
+                    or record.get("summary_id"),
+                    "importance": float(record.get("importance", 0.5)),
+                    "status": record.get("status", "active"),
+                    "created_at": int(record.get("created_at") or time.time()),
+                    "last_access_at": int(record.get("last_access_at") or 0),
+                    "vector": vector,
                 }
             )
 
-        type_mapping = {
-            "semantic_memory": "semantic",
-            "episodic_memory": "episodic",
-            "procedural_memory": "procedural",
-        }
-
-        for key, memory_type in type_mapping.items():
-            items = memory_dict.get(key, [])
-            if not isinstance(items, list):
-                continue
-
-            for item in items:
-                if isinstance(item, dict):
-                    content = item.get("content", "").strip()
-                    if content:
-                        texts_to_embed.append(content)
-                        records_to_insert.append(
-                            {
-                                "user_id": user_id,
-                                "thread_id": thread_id,
-                                "memory_type": memory_type,
-                                "content": content,
-                                "summary_id": None,
-                                "importance": float(item.get("importance_score", 0.5)),
-                                "created_at": created_at,
-                                "last_access_at": last_access_at,
-                            }
-                        )
-
-        if not texts_to_embed:
-            logger.warning("没有有效内容需要插入")
-            return False
-
-        vectors = await self.embeddings.aembed_documents(texts_to_embed)
-
-        for record, vector in zip(records_to_insert, vectors):
-            record["vector"] = vector
-
         try:
-            await self.client.insert(
-                collection_name=self.collection_name,
-                data=records_to_insert,
-            )
-            logger.info(
-                f"批量添加记忆完成 - 总计：{len(records_to_insert)} 条，"
-                f"用户：{user_id}, 会话：{thread_id}, summary_id: {summary_id}"
-            )
+            for start in range(0, len(data), 100):
+                await self.client.upsert(
+                    collection_name=self.collection_name,
+                    data=data[start : start + 100],
+                )
+            logger.info(f"Milvus 记忆投影完成: {len(data)} 条")
             return True
         except Exception as e:
-            logger.error(f"批量插入记忆失败：{e}")
-            raise
+            logger.error(f"写入 Milvus 记忆投影失败: {e}")
+            return False
 
 
 async def test_update_access_time():

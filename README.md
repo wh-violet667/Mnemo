@@ -83,8 +83,8 @@ flowchart LR
 
 | 存储 | 内容 |
 |---|---|
-| Milvus | 知识库子块向量、BM25 稀疏向量、四类长期记忆 |
-| PostgreSQL | 用户、知识库、文件、父块、块哈希、原始对话、会话 |
+| PostgreSQL | 记忆事实源（memories / memory_versions / memory_sources / summaries）、用户、知识库、文件、父块、原始对话、会话 |
+| Milvus | 知识库子块向量、BM25 稀疏向量、记忆检索投影（可由 PostgreSQL 重建） |
 | Redis | LangGraph checkpoint、用户画像缓存 |
 | DashScope | 对话模型、embedding、rerank |
 
@@ -112,8 +112,40 @@ flowchart LR
 | 情节 | 具体事件、任务、历史互动 |
 | 程序 | 可复用的方法、流程、步骤 |
 
-- 记忆写入前做相似度去重（≥0.9 视为重复），用户画像新旧融合。
+- 记忆写入前做相似度冲突检测（≥0.9 触发 supersede），用户画像新旧融合。
 - 检索打分：语义相似度 45% + 时近性 25% + 重要性 30%，再乘类型权重。
+
+### 记忆数据模型
+
+PostgreSQL 是记忆的事实源，Milvus 只保存可重建的检索投影：
+
+```text
+summaries          一次压缩批次的摘要正文
+memories           当前记忆事实（active / superseded / deleted）
+memory_versions    记忆版本历史（valid_from / valid_to / superseded_by）
+memory_sources     记忆到原始消息的来源链
+```
+
+写入顺序：
+
+1. 新记忆先和旧记忆做向量候选召回；
+2. 相似度 ≥0.9 时，旧记忆标记 `superseded`，新记忆标记 `active`，不删除旧内容；
+3. 在同一个 PostgreSQL 事务里写 summary、memory、version、source、消息 `summary_id` 和用户画像；
+4. 事务提交后，再把新记忆和旧记忆状态投影到 Milvus；失败时标记 `index_status=failed`，用 reindex 修复。
+
+从旧版 `memory_collection`（`auto_id=True`）升级：
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe migrate_memory_v2.py
+```
+
+已迁移但 Milvus 投影丢失或需要换 embedding 模型时：
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe reindex_memories.py --rebuild
+```
 - 后台任务每 180 秒检查未压缩对话，超过 token 阈值（默认 400 tokens）才提取，避免每轮对话都调用 LLM；所以短对话不会立即增加记忆条数。
 
 ### 会话与引用
@@ -291,11 +323,13 @@ Mnemo/
 │   ├── citations.py             # 引用编号与来源格式化
 │   ├── conversations.py         # 会话 ID、thread ID、标题工具
 │   ├── knowledge_base_manager.py# 父子块、混合检索、删除
-│   ├── memory_manager.py        # 四类记忆、打分、去重
+│   ├── memory_manager.py        # 记忆检索、supersede 判定、Milvus 投影
 │   ├── auto_store_memory_from_psql.py  # 180s 记忆压缩任务
+│   ├── migrate_memory_v2.py     # 旧 memory_collection 迁移脚本
+│   ├── reindex_memories.py      # 从 PostgreSQL 重建 Milvus 记忆投影
 │   ├── documents_process.py     # PDF/Word 解析、分块、rerank
 │   ├── milvus_client.py         # Milvus 客户端与代理
-│   ├── postgresql_client.py     # PostgreSQL 客户端与表结构
+│   ├── postgresql_client.py     # PostgreSQL 客户端、表结构与记忆事务
 │   ├── redis_cache.py           # Redis 客户端
 │   ├── settings.py              # 启动前环境变量校验
 │   └── main.py                  # 应用入口
@@ -324,11 +358,16 @@ Mnemo/
 - **前端仍以单文件为主**：请求流已拆到 `frontend/streaming.py`，但 `frontend/app.py` 仍承担约 1600 行 UI/CSS/状态，后续应继续拆分组件与状态。
 - **rerank 有延迟成本**：`qwen3-rerank` 带来约 1 秒 P95 增加，适合对排序质量敏感的场景。
 - **依赖外部服务**：DashScope 和 Zilliz 都是云服务，离线环境需要替换为本地模型/本地 Milvus。
+- **索引是最终一致**：PostgreSQL 事务提交后若 Milvus 投影失败，需要运行 `reindex_memories.py`；尚未实现自动 outbox worker。
+- **冲突策略仍是阈值式**：≥0.9 会把旧记忆标记为 superseded，尚未接入 LLM 判断 ADD / UPDATE / NOOP；相似但不同的事实可能被误替换。
 
 ## Roadmap
 
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
+- [x] 记忆事实源、版本历史、来源链与 supersede
+- [ ] 记忆 outbox：自动重试 Milvus 投影失败
+- [ ] LLM 冲突裁决：区分 ADD / UPDATE / NOOP
 - [ ] 记忆纠正：手动编辑内容或标记为过期
 - [ ] 文档 `status=current/archived` 元数据过滤，解决版本区分
 - [ ] GitHub Actions：ruff + pytest + eval 格式检查

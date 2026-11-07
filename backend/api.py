@@ -582,9 +582,9 @@ async def list_memories(
     user_id: int,
     memory_type: str = "",
     limit: int = 100,
-    milvus_client=Depends(get_milvus_client),
+    postgresql_client=Depends(get_postgresql_client),
 ):
-    """读取用户的长期记忆，可按类型过滤。"""
+    """读取用户的长期记忆；Postgres 是事实源。"""
     if memory_type and memory_type not in MEMORY_TYPES:
         raise HTTPException(
             status_code=422,
@@ -592,7 +592,7 @@ async def list_memories(
         )
 
     try:
-        memories = await milvus_client.list_memories(
+        memories = await postgresql_client.list_memories(
             user_id=user_id,
             memory_type=memory_type or None,
             limit=max(1, min(limit, 200)),
@@ -612,17 +612,22 @@ async def list_memories(
 async def delete_memory(
     memory_id: str,
     user_id: int,
+    postgresql_client=Depends(get_postgresql_client),
     milvus_client=Depends(get_milvus_client),
 ):
-    """删除一条长期记忆；只能删除当前用户的记忆。"""
+    """软删除一条长期记忆；Postgres 保留事实与版本。"""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", memory_id):
         raise HTTPException(status_code=422, detail="非法的 memory_id")
 
-    deleted = await milvus_client.delete_memory(memory_id, user_id)
+    deleted = await postgresql_client.soft_delete_memory(memory_id, user_id)
     if deleted <= 0:
         raise HTTPException(status_code=404, detail="记忆不存在或无权删除")
 
-    return {"status": "success", "deleted": deleted}
+    indexed = await milvus_client.set_memory_status([memory_id], "deleted")
+    await postgresql_client.mark_memories_index_status(
+        [memory_id], "indexed" if indexed else "failed"
+    )
+    return {"status": "success", "deleted": deleted, "indexed": indexed}
 
 
 @router.get("/chat_with_agent/stream")

@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import time
 import uuid
 import json
 from typing import List, Dict, Any
@@ -154,7 +155,7 @@ async def get_unsunmarized_conversations(
         async with pg_client.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, role, content, created_at, thread_id
+                SELECT id, role, content, created_at, thread_id, conversation_id
                 FROM raw_conversations
                 WHERE user_id = $1 
                 AND thread_id = $2
@@ -245,17 +246,19 @@ async def _store_memories(
     filtered_message_ids: List[str],
     model: BaseChatModel,
 ) -> Dict[str, Any]:
-    """存储记忆到 PostgreSQL 和 Milvus，任何一项失败都不提交数据"""
+    """把一批抽取结果写入 Postgres（事实源），再投影到 Milvus。
+
+    Postgres 事务提交后，Milvus 失败不会回滚事实数据；索引状态会标记为
+    failed，交给 reindex 脚本修复。
+    """
     milvus_client = await get_milvus_client()
     pg_client = await get_postgresql_client()
 
-    new_user_profile = extract_result.get("user_profile", "")
+    new_user_profile = (extract_result.get("user_profile") or "").strip()
     summary_id = str(uuid.uuid4())
+    created_at = int(time.time())
 
-    # 查询旧画像（用于回滚和画像补充）
-    old_user_profile = await pg_client.get_user_profile(user_id)
-
-    # 确定需要更新的消息ID
+    # 确定需要更新的消息 ID
     all_message_ids = [str(msg["id"]) for msg in messages]
     update_message_ids = [
         mid for mid in all_message_ids if mid not in filtered_message_ids
@@ -270,26 +273,100 @@ async def _store_memories(
             "message_count": len(messages),
         }
 
-    # 准备数据
-    keep_keys = ["summary", "semantic_memory", "episodic_memory", "procedural_memory"]
-    filtered_memory = {k: v for k, v in extract_result.items() if k in keep_keys}
-    """
-    filtered_memory =  {
-            "summary": {"content": str, "importance_score": float},
-            "semantic_memory": [{"content": str, "importance_score": float}, ...],
-            "episodic_memory": [{"content": str, "importance_score": float}, ...],
-            "procedural_memory": [{"content": str, "importance_score": float}, ...],
-            "user_profile": str,
-            "filtered_message_ids": list
-        }
-    """
-    # 检测冲突记忆（删除相似度高于0.9的记忆）
-    filtered_memory = await milvus_client.resolve_conflicts(
-        filtered_memory=filtered_memory, user_id=user_id
-    )
+    conversation_id = messages[0].get("conversation_id") if messages else None
+    if not conversation_id and ":" in thread_id:
+        conversation_id = thread_id.split(":", 1)[1]
 
-    #使用小模型对新旧用户画像进行补充
+    embedding_model = os.getenv("EMBEDDING_MODEL")
+    embedding_dim = int(os.getenv("dense_dimension", "1024"))
+
+    # 构造稳定的 memory_id；summary 和非 summary 都带同一批 summary_id
+    new_memories: List[Dict[str, Any]] = []
+
+    summary = extract_result.get("summary") or {}
+    summary_content = (summary.get("content") or "").strip()
+    if summary_content:
+        new_memories.append(
+            {
+                "memory_id": f"mem_{uuid.uuid4().hex}",
+                "user_id": user_id,
+                "memory_type": "summary",
+                "content": summary_content,
+                "importance": float(summary.get("importance_score", 0.5)),
+                "source_summary_id": summary_id,
+                "status": "active",
+                "thread_id": thread_id,
+                "conversation_id": conversation_id,
+                "embedding_model": embedding_model,
+                "embedding_dim": embedding_dim,
+                "created_at": created_at,
+                "last_access_at": created_at,
+            }
+        )
+
+    type_mapping = {
+        "semantic_memory": "semantic",
+        "episodic_memory": "episodic",
+        "procedural_memory": "procedural",
+    }
+    for key, memory_type in type_mapping.items():
+        for item in extract_result.get(key, []) or []:
+            content = (item.get("content") or "").strip()
+            if not content:
+                continue
+            new_memories.append(
+                {
+                    "memory_id": f"mem_{uuid.uuid4().hex}",
+                    "user_id": user_id,
+                    "memory_type": memory_type,
+                    "content": content,
+                    "importance": float(item.get("importance_score", 0.5)),
+                    "source_summary_id": summary_id,
+                    "status": "active",
+                    "thread_id": thread_id,
+                    "conversation_id": conversation_id,
+                    "embedding_model": embedding_model,
+                    "embedding_dim": embedding_dim,
+                    "created_at": created_at,
+                    "last_access_at": created_at,
+                }
+            )
+
+    if not new_memories:
+        return {
+            "success": False,
+            "reason": "没有可写入的记忆",
+            "filtered_message_ids": filtered_message_ids,
+            "token_count": total_tokens,
+            "message_count": len(messages),
+        }
+
+    # 用旧记忆做 supersede 判定；不删除旧记忆，只记录新版本关系
+    try:
+        superseded_map, vectors = await milvus_client.find_superseded_candidates(
+            new_memories, user_id
+        )
+    except Exception as e:
+        logger.error(f"记忆冲突检测失败: {e}", exc_info=True)
+        return {
+            "success": False,
+            "reason": f"记忆冲突检测失败: {str(e)}",
+            "filtered_message_ids": filtered_message_ids,
+            "token_count": total_tokens,
+            "message_count": len(messages),
+        }
+
+    superseded = [
+        {
+            "memory_id": match["memory_id"],
+            "superseded_by": new_memories[idx]["memory_id"],
+        }
+        for idx, match in superseded_map.items()
+    ]
+
+    # 使用小模型合并新旧用户画像
     if new_user_profile:
+        old_user_profile = await pg_client.get_user_profile(user_id)
         response = await model.ainvoke(
             [
                 HumanMessage(
@@ -300,95 +377,87 @@ async def _store_memories(
                 )
             ]
         )
-        # 只需要这一行！纯文本画像直接用
         new_user_profile = response.content.strip()
 
-    try:
-        # 1. 更新 summary_id
-        summary_success = await pg_client.update_messages_with_summary_id(
-            update_message_ids, summary_id
-        )
-        if not summary_success:
-            logger.error(f"summary_id 更新失败，终止操作")
-            return {
-                "success": False,
-                "reason": "summary_id 更新失败",
-                "filtered_message_ids": filtered_message_ids,
-                "token_count": total_tokens,
-                "message_count": len(messages),
-            }
+    # 1. Postgres 单事务：summary + memories + versions + sources + 消息标记 + 画像
+    stored = await pg_client.store_memory_batch(
+        user_id=user_id,
+        thread_id=thread_id,
+        conversation_id=conversation_id,
+        summary_id=summary_id,
+        summary_content=summary_content,
+        summary_importance=float(summary.get("importance_score", 0.5)),
+        token_count=total_tokens,
+        message_count=len(update_message_ids),
+        model_name=getattr(model, "model_name", None)
+        or os.getenv("SUMMARIZATION_MODEL"),
+        memories=new_memories,
+        superseded=superseded,
+        message_ids=update_message_ids,
+        user_profile=new_user_profile or None,
+    )
 
-        # 2. 更新用户画像
-        if new_user_profile:
-            profile_success = await pg_client.update_user_profile(
-                user_id, new_user_profile
-            )
-            if not profile_success:
-                logger.error(f"用户画像更新失败，回滚 summary_id")
-                await pg_client.update_messages_with_summary_id(
-                    update_message_ids, None
-                )
-                return {
-                    "success": False,
-                    "reason": "用户画像更新失败，已回滚",
-                    "filtered_message_ids": filtered_message_ids,
-                    "token_count": total_tokens,
-                    "message_count": len(messages),
-                }
-
-        # 3. 更新 Milvus
-        milvus_success = await milvus_client.add_memories_batch(
-            user_id=user_id,
-            thread_id=thread_id,
-            memory_dict=filtered_memory,
-            summary_id=summary_id,
-        )
-
-        if not milvus_success:
-            logger.error(f"Milvus插入失败，回滚PostgreSQL")
-            # 回滚 summary_id
-            await pg_client.update_messages_with_summary_id(update_message_ids, None)
-            # 回滚用户画像
-            if old_user_profile is not None:
-                await pg_client.update_user_profile(user_id, old_user_profile)
-            return {
-                "success": False,
-                "reason": "Milvus插入失败，已回滚PostgreSQL",
-                "filtered_message_ids": filtered_message_ids,
-                "token_count": total_tokens,
-                "message_count": len(messages),
-            }
-
-        # 全部成功
-        logger.info(f"成功压缩会话 {thread_id}，摘要 {summary_id}")
-        return {
-            "success": True,
-            "summary_id": summary_id,
-            "user_profile": new_user_profile,
-            "filtered_message_ids": filtered_message_ids,
-            "token_count": total_tokens,
-            "message_count": len(messages),
-            "updated_message_count": len(update_message_ids),
-        }
-
-    except Exception as e:
-        logger.error(f"存储记忆异常: {e}")
-
-        # 尝试回滚
-        try:
-            await pg_client.update_messages_with_summary_id(update_message_ids, None)
-            if old_user_profile is not None:
-                await pg_client.update_user_profile(user_id, old_user_profile)
-        except Exception as rollback_error:
-            logger.error(f"回滚失败: {rollback_error}")
-
+    if not stored:
         return {
             "success": False,
-            "reason": f"存储记忆失败: {str(e)}",
+            "reason": "Postgres 记忆事务写入失败",
             "filtered_message_ids": filtered_message_ids,
             "token_count": total_tokens,
             "message_count": len(messages),
         }
+
+    # 2. Milvus 投影：新记忆 upsert，旧记忆状态改为 superseded
+    new_ids = [memory["memory_id"] for memory in new_memories]
+    old_ids = [item["memory_id"] for item in superseded]
+    try:
+        index_ok = await milvus_client.index_memory_records(new_memories, vectors)
+        status_ok = True
+        if old_ids:
+            status_ok = await milvus_client.set_memory_status(
+                old_ids, "superseded"
+            )
+    except Exception as e:
+        logger.error(f"Milvus 投影异常: {e}", exc_info=True)
+        index_ok = False
+        status_ok = False
+
+    indexed = bool(index_ok and status_ok)
+    if indexed:
+        await pg_client.mark_memories_index_status(new_ids, "indexed")
+        if old_ids:
+            await pg_client.mark_memories_index_status(old_ids, "indexed")
+    else:
+        await pg_client.mark_memories_index_status(new_ids, "failed")
+        if old_ids:
+            await pg_client.mark_memories_index_status(old_ids, "failed")
+        logger.error(
+            "Postgres 已提交，但 Milvus 投影失败: summary=%s new=%s old=%s；"
+            "请运行 backend/reindex_memories.py 修复索引。",
+            summary_id,
+            len(new_ids),
+            len(old_ids),
+        )
+
+    logger.info(
+        "成功压缩会话 %s，摘要 %s，新记忆 %s 条，superseded %s 条，indexed=%s",
+        thread_id,
+        summary_id,
+        len(new_memories),
+        len(superseded),
+        indexed,
+    )
+    return {
+        "success": True,
+        "summary_id": summary_id,
+        "user_profile": new_user_profile,
+        "filtered_message_ids": filtered_message_ids,
+        "token_count": total_tokens,
+        "message_count": len(messages),
+        "updated_message_count": len(update_message_ids),
+        "memory_ids": new_ids,
+        "superseded_ids": old_ids,
+        "indexed": indexed,
+    }
 
 
 async def process_all_users_conversations(
