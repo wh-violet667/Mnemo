@@ -1674,6 +1674,27 @@ class PostgreSQLParentClient:
         except Exception as e:
             logger.warning(f"更新索引状态失败: {e}")
 
+    async def update_memory_last_access(
+        self, memory_ids: List[str], timestamp: int
+    ) -> None:
+        """同步记忆访问时间；Postgres 是展示与审计的事实源。"""
+
+        if not self.pool or not memory_ids:
+            return
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE memories
+                    SET last_access_at = $1
+                    WHERE memory_id = ANY($2::varchar[])
+                    """,
+                    int(timestamp),
+                    memory_ids,
+                )
+        except Exception as e:
+            logger.warning(f"更新记忆访问时间失败: {e}")
+
     async def get_memories_for_reindex(
         self, user_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:

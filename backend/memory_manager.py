@@ -419,7 +419,19 @@ class MemoryManager:
                 data=update_data,
                 partial_update=True,
             )
-            print(f"更新记忆访问时间结果：{res}")
+            logger.info(f"更新记忆访问时间结果：{res}")
+
+            # Postgres 是展示/审计的事实源；失败不影响本次检索
+            try:
+                from postgresql_client import get_postgresql_client
+
+                pg_client = await get_postgresql_client()
+                await pg_client.update_memory_last_access(
+                    [item["id"] for item in update_data],
+                    current_timestamp,
+                )
+            except Exception as e:
+                logger.warning(f"同步 Postgres 访问时间失败: {e}")
 
     def get_the_top_k_memories(
         self,

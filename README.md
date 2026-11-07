@@ -126,6 +126,8 @@ memory_versions    记忆版本历史（valid_from / valid_to / superseded_by）
 memory_sources     记忆到原始消息的来源链
 ```
 
+Milvus 投影仍保留 `content`，因为 BM25 稀疏向量由它生成；但 `content` 的事实副本在 PostgreSQL，Milvus 可以随时重建。
+
 写入顺序：
 
 1. 新记忆先和旧记忆做向量候选召回；
