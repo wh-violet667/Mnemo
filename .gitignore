@@ -1,0 +1,66 @@
+# 忽略所有 __pycache__ 目录
+__pycache__/
+
+# 忽略 IDE 配置目录
+.idea/
+.vscode/
+
+# 忽略虚拟环境
+.venv/
+
+
+# 忽略其他项目目录
+黑马的RAN项目/
+RAG基础知识/
+SuperMew-backend/
+
+# 忽略 backend 中的 .env 文件
+backend/.env
+backend/data
+backend/temp
+backend/提示词
+
+
+
+# 确保 backend、frontend、data 目录被跟踪（不忽略）
+!backend/
+!frontend/
+!data/
+
+# 确保 README.md 被跟踪
+!README.md
+
+#忽略data文件夹
+data
+
+#忽略.clade文件夹
+.clade
+
+postgreSQL信息.md
+
+#skill 相关文件
+.agents
+skills-lock.json
+.claude
+
+记忆模块
+
+CLAUDE.md
+
+# 根目录环境变量（README 让在根目录建 .env）
+.env
+
+# 本工具生成的会话/工作流产物
+.openchamber/
+
+# 评测输出
+evals/results/
+
+# 内部笔记/审查材料，不发布
+_internal/
+
+# 评测语料（由脚本生成）
+evals/corpus/
+
+# pytest cache
+.pytest_cache/

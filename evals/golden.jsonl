@@ -1,0 +1,30 @@
+{"id": "q001", "query": "退款期限是多久？", "kb_id": "eval-kb", "expected_file": "refund_policy.pdf", "expected_phrase": "30 days", "type": "single_hop", "difficulty": "easy"}
+{"id": "q002", "query": "退款一般几个工作日处理完成？", "kb_id": "eval-kb", "expected_file": "refund_policy.pdf", "expected_phrase": "5 business days", "type": "single_hop", "difficulty": "easy"}
+{"id": "q003", "query": "申请退款需要提供什么信息？", "kb_id": "eval-kb", "expected_file": "refund_policy.pdf", "expected_phrase": "order number", "type": "single_hop", "difficulty": "easy"}
+{"id": "q004", "query": "退款会退回到哪里？", "kb_id": "eval-kb", "expected_file": "refund_policy.pdf", "expected_phrase": "original payment method", "type": "single_hop", "difficulty": "medium"}
+{"id": "q005", "query": "试用期是多长时间？", "kb_id": "eval-kb", "expected_file": "employee_handbook.pdf", "expected_phrase": "3 months", "type": "single_hop", "difficulty": "easy"}
+{"id": "q006", "query": "员工每年有多少天年假？", "kb_id": "eval-kb", "expected_file": "employee_handbook.pdf", "expected_phrase": "10 days", "type": "single_hop", "difficulty": "easy"}
+{"id": "q007", "query": "标准工作时间是几点到几点？", "kb_id": "eval-kb", "expected_file": "employee_handbook.pdf", "expected_phrase": "09:00 to 18:00", "type": "single_hop", "difficulty": "easy"}
+{"id": "q008", "query": "每周最多可以远程办公几天？", "kb_id": "eval-kb", "expected_file": "employee_handbook.pdf", "expected_phrase": "2 days per week", "type": "single_hop", "difficulty": "medium"}
+{"id": "q009", "query": "出差住宿每晚的上限是多少？", "kb_id": "eval-kb", "expected_file": "travel_policy.pdf", "expected_phrase": "500 CNY", "type": "single_hop", "difficulty": "easy"}
+{"id": "q010", "query": "国内航班必须坐什么舱位？", "kb_id": "eval-kb", "expected_file": "travel_policy.pdf", "expected_phrase": "economy class", "type": "single_hop", "difficulty": "easy"}
+{"id": "q011", "query": "出差回来后多久内要提交报销？", "kb_id": "eval-kb", "expected_file": "travel_policy.pdf", "expected_phrase": "7 days", "type": "single_hop", "difficulty": "medium"}
+{"id": "q012", "query": "预订出差行程前需要谁批准？", "kb_id": "eval-kb", "expected_file": "travel_policy.pdf", "expected_phrase": "Manager approval", "type": "single_hop", "difficulty": "medium"}
+{"id": "q013", "query": "密码最少需要多少位？", "kb_id": "eval-kb", "expected_file": "security_policy.pdf", "expected_phrase": "12 characters", "type": "single_hop", "difficulty": "easy"}
+{"id": "q014", "query": "密码需要多久更换一次？", "kb_id": "eval-kb", "expected_file": "security_policy.pdf", "expected_phrase": "90 days", "type": "single_hop", "difficulty": "easy"}
+{"id": "q015", "query": "安全事件必须在多久内上报？", "kb_id": "eval-kb", "expected_file": "security_policy.pdf", "expected_phrase": "1 hour", "type": "single_hop", "difficulty": "medium"}
+{"id": "q016", "query": "是否强制要求多因素认证？", "kb_id": "eval-kb", "expected_file": "security_policy.pdf", "expected_phrase": "Multi-factor authentication", "type": "single_hop", "difficulty": "easy"}
+{"id": "q017", "query": "知识库支持哪些文件格式？", "kb_id": "eval-kb", "expected_file": "product_faq.pdf", "expected_phrase": "PDF and DOCX", "type": "single_hop", "difficulty": "easy"}
+{"id": "q018", "query": "单个文件最大可以上传多大？", "kb_id": "eval-kb", "expected_file": "product_faq.pdf", "expected_phrase": "200 MB", "type": "single_hop", "difficulty": "easy"}
+{"id": "q019", "query": "删除后的文档会保留多久？", "kb_id": "eval-kb", "expected_file": "product_faq.pdf", "expected_phrase": "30 days", "type": "single_hop", "difficulty": "medium"}
+{"id": "q020", "query": "默认知识库会搜索哪些范围？", "kb_id": "eval-kb", "expected_file": "product_faq.pdf", "expected_phrase": "all libraries", "type": "single_hop", "difficulty": "medium"}
+{"id": "q021", "query": "现行退款政策是 30 天还是 14 天？", "kb_id": "eval-kb", "expected_file": "refund_policy.pdf", "expected_phrase": "30 days", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q022", "query": "现行差旅政策中，住宿上限是 500 CNY 还是 800 EUR？", "kb_id": "eval-kb", "expected_file": "travel_policy.pdf", "expected_phrase": "500 CNY", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q023", "query": "正式员工密码最少 12 位还是 8 位？", "kb_id": "eval-kb", "expected_file": "security_policy.pdf", "expected_phrase": "12 characters", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q024", "query": "正式员工年假是 10 天还是 5 天？", "kb_id": "eval-kb", "expected_file": "employee_handbook.pdf", "expected_phrase": "10 days", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q025", "query": "当前产品支持 PDF 和 DOCX，还是只支持 PDF？", "kb_id": "eval-kb", "expected_file": "product_faq.pdf", "expected_phrase": "PDF and DOCX", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q026", "query": "退款处理是 5 个工作日还是 10 个工作日？", "kb_id": "eval-kb", "expected_file": "refund_policy.pdf", "expected_phrase": "5 business days", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q027", "query": "国内航班必须经济舱，这条属于哪个政策？", "kb_id": "eval-kb", "expected_file": "travel_policy.pdf", "expected_phrase": "economy class", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q028", "query": "安全事件 1 小时内上报，还是 4 小时？", "kb_id": "eval-kb", "expected_file": "security_policy.pdf", "expected_phrase": "1 hour", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q029", "query": "删除文档保留 30 天，还是 7 天？", "kb_id": "eval-kb", "expected_file": "product_faq.pdf", "expected_phrase": "30 days", "type": "version_disambiguation", "difficulty": "hard"}
+{"id": "q030", "query": "远程办公每周 2 天，还是 1 天？", "kb_id": "eval-kb", "expected_file": "employee_handbook.pdf", "expected_phrase": "2 days per week", "type": "version_disambiguation", "difficulty": "hard"}

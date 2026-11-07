@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# 开发/测试
+pytest>=7.4
+pytest-asyncio>=0.23
+ruff>=0.5
