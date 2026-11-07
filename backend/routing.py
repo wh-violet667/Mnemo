@@ -19,11 +19,12 @@ RetrievalMode = Literal["auto", "fast", "deep"]
 DEEP_HINTS = (
     "比较", "区别", "差异", "分别", "各自", "同时", "以及", "还是",
     "版本", "适用", "生效", "过期", "之前", "之后", "冲突",
-    "哪些", "关系",
+    "关系",
 )
 
-# 粗粒度实体识别：书名号《...》、两个及以上字符的大写开头英文词（EMEA/VPN/MFA/PDF 等）
-_ENTITY_PATTERN = re.compile(r"《[^》]+》|[A-Z][A-Za-z0-9]{1,}")
+# 粗粒度实体识别：书名号《...》、三个及以上字符的大写开头拉丁词
+# （EMEA/VPN/MFA/OVA 等；TV/OP/ED 等两字符媒介缩写不算内容实体）
+_ENTITY_PATTERN = re.compile(r"《[^》]+》|[A-Z][A-Za-z0-9]{2,}")
 
 # 子查询拆分分隔符，按优先级排列（先长后短，避免"以及"被"与"截断）
 _SPLIT_PATTERN = re.compile(r"以及|还是|区别|差异|、|和|与")
@@ -39,7 +40,6 @@ def needs_deep(query: str) -> bool:
     命中任一条件即判 deep：
     - 包含 DEEP_HINTS 提示词；
     - 查询长度 >= 40 字；
-    - 出现两个及以上问号；
     - 包含两个及以上明显实体。
     """
     q = (query or "").strip()
@@ -48,8 +48,6 @@ def needs_deep(query: str) -> bool:
     if any(hint in q for hint in DEEP_HINTS):
         return True
     if len(q) >= 40:
-        return True
-    if q.count("？") + q.count("?") >= 2:
         return True
     if len(_ENTITY_PATTERN.findall(q)) >= 2:
         return True

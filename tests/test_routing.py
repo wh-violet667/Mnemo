@@ -28,8 +28,17 @@ class TestNeedsDeep:
         assert len(query) >= 40
         assert needs_deep(query) is True
 
-    def test_two_question_marks_trigger_deep(self):
-        assert needs_deep("退款期限是多久？退款处理又要多久？") is True
+    def test_two_letter_media_abbreviations_do_not_count_as_entities(self):
+        # TV/OP/ED 等两字符媒介缩写不是内容实体（violet 语料误路由回归用例）
+        assert needs_deep("TV 动画《紫罗兰永恒花园》由哪家动画公司制作？") is False
+        assert needs_deep("TV 动画的片头曲（OP）叫什么？由谁演唱？") is False
+
+    def test_two_question_marks_do_not_trigger_deep(self):
+        # 双问号是同文档复合问句的弱信号，已移除该规则
+        assert needs_deep("退款期限是多久？退款处理又要多久？") is False
+
+    def test_enumeration_marker_does_not_trigger_deep(self):
+        assert needs_deep("生还的基尔伯特失去了身体的哪些部分？") is False
 
     def test_empty_query_is_fast(self):
         assert needs_deep("") is False
