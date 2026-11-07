@@ -1444,11 +1444,28 @@ def render_sidebar() -> None:
                 if files:
                     for index, file in enumerate(files[:12]):
                         file_col, action_col = st.columns([5, 1])
+                        status = str(file.get("status") or "")
+                        status_label = {
+                            "processing": "处理中",
+                            "failed": "失败",
+                            "ready": "就绪",
+                        }.get(status, status)
+                        status_html = ""
+                        if status and status != "ready":
+                            color = "#b45309" if status == "processing" else "#b91c1c"
+                            status_html = (
+                                f" <span style='color:{color};font-size:.64rem'>"
+                                f"[{html.escape(status_label)}]</span>"
+                            )
                         with file_col:
                             st.markdown(
-                                f"<div style='font-size:.72rem;color:#c5bbad;padding-top:5px'>📄 {html.escape(str(file.get('file_name', ''))[:22])}</div>",
+                                f"<div style='font-size:.72rem;color:#c5bbad;padding-top:5px'>📄 {html.escape(str(file.get('file_name', ''))[:22])}{status_html}</div>",
                                 unsafe_allow_html=True,
                             )
+                            if status == "failed":
+                                st.caption(
+                                    f"处理失败：{html.escape(str(file.get('error') or '未知错误'))[:80]}"
+                                )
                         with action_col:
                             if st.button(
                                 "🗑",

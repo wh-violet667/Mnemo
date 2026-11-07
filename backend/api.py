@@ -1,4 +1,8 @@
-from documents_process import TempDocumentProcessor, DocumentProcessor
+from documents_process import (
+    TempDocumentProcessor,
+    DocumentProcessor,
+    process_document_job,
+)
 from hash_storage import HashStorage
 from fastapi import (
     APIRouter,
@@ -20,8 +24,12 @@ import re
 import aiofiles
 import os
 from fastapi.responses import StreamingResponse
-from agent import stream_agent_response
-from conversations import normalize_conversation_id
+from agent import (
+    stream_agent_response,
+    delete_thread_checkpoint,
+    trim_last_turn_checkpoint,
+)
+from conversations import make_thread_id, normalize_conversation_id
 from schemas import (
     DocumentUploadResponse,
     DocumentDeleteResponse,
@@ -184,6 +192,11 @@ async def file_upload(
                     is_duplicate=True,
                 )
 
+            # 先落一条 processing 记录，后台任务失败时也能被看见
+            await hash_storage.add_file_hash(
+                file_hash, filename, knowledge_base_id, user_id
+            )
+
             # 确保 background_tasks 不为 None
             if background_tasks is None:
                 background_tasks = BackgroundTasks()
@@ -191,15 +204,15 @@ async def file_upload(
             # DocumentProcessor 需要改为异步版本
             document_instance = DocumentProcessor(hash_storage)
 
-            # 将文档处理任务添加到后台（处理完成后会自动清理临时文件，传入 user_id）
-            # process_document 需要是异步函数
+            # 后台任务：成功写 ready，失败写 failed + error
             background_tasks.add_task(
-                document_instance.process_document,
+                process_document_job,
+                document_instance,
                 temp_file_path=temp_file_path,
                 filename=filename,
                 file_hash=file_hash,
                 knowledge_base_id=knowledge_base_id,
-                user_id=user_id,  # 新增
+                user_id=user_id,
             )
 
             # 立即返回
@@ -366,6 +379,8 @@ async def get_knowledge_base_files(
             FileItem(
                 file_hash=file["file_hash"],
                 file_name=file["file_name"],
+                status=file.get("status"),
+                error=file.get("error"),
                 uploaded_at=file["uploaded_at"],
             )
             for file in result["files"]
@@ -536,7 +551,14 @@ async def delete_last_turn(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     deleted = await postgresql_client.delete_last_turn(conversation_id, user_id)
-    return {"status": "success", "deleted": deleted}
+    checkpoint_synced = await trim_last_turn_checkpoint(
+        make_thread_id(user_id, conversation_id)
+    )
+    return {
+        "status": "success",
+        "deleted": deleted,
+        "checkpoint_synced": checkpoint_synced,
+    }
 
 
 @router.delete("/conversations/{conversation_id}")
@@ -549,7 +571,14 @@ async def delete_conversation(
     deleted = await postgresql_client.delete_conversation(conversation_id, user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="会话不存在或无权删除")
-    return {"status": "success", "message": "会话已删除"}
+    checkpoint_synced = await delete_thread_checkpoint(
+        make_thread_id(user_id, conversation_id)
+    )
+    return {
+        "status": "success",
+        "message": "会话已删除",
+        "checkpoint_synced": checkpoint_synced,
+    }
 
 
 @router.get(

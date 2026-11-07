@@ -38,6 +38,58 @@ class TempDocumentProcessor:
             logger.error(f"删除临时文件 {temp_file_path} 时出错: {e}")
 
 
+async def process_document_job(
+    document_processor: "DocumentProcessor",
+    temp_file_path: Path,
+    filename: str,
+    file_hash: str,
+    knowledge_base_id: str,
+    user_id: int,
+):
+    """后台文档任务包装器：把处理结果写回 file_metadata.status。
+
+    失败时保留一条 status=failed 的记录，前端可见；用户删除该文件后
+    可以重新上传，避免“上传成功但永远在处理中”的黑洞。
+    """
+
+    pg_client = await get_postgresql_client()
+    try:
+        result = await document_processor.process_document(
+            temp_file_path=temp_file_path,
+            filename=filename,
+            file_hash=file_hash,
+            knowledge_base_id=knowledge_base_id,
+            user_id=user_id,
+        )
+        if result:
+            await pg_client.update_file_status(
+                file_hash, knowledge_base_id, user_id, "ready"
+            )
+        else:
+            await pg_client.update_file_status(
+                file_hash,
+                knowledge_base_id,
+                user_id,
+                "failed",
+                "文档为空或无法分块",
+            )
+        return result
+    except Exception as exc:
+        logger.error(f"文档处理失败 {filename}: {exc}", exc_info=True)
+        await pg_client.update_file_status(
+            file_hash,
+            knowledge_base_id,
+            user_id,
+            "failed",
+            str(exc)[:500],
+        )
+        try:
+            await TempDocumentProcessor().delete_temp_file(temp_file_path)
+        except Exception:
+            pass
+        return []
+
+
 class DocumentProcessor:
     """文档加载和分片服务"""
 
@@ -164,29 +216,17 @@ class DocumentProcessor:
         )
         logger.info(f"==========添加文件元数据完成==========")
 
-        # ========== 2. 批量检查所有哈希（排除当前文件的已有块哈希） ==========
+        # ========== 2. 每个文件保留自己的子块 ==========
+        # 不再跨文件跳过重复子块：跳过会让新文件的父块没有对应向量，
+        # 删除旧文件后新文件就再也检索不到这段内容。
         all_hashes = [
             hashlib.sha256(chunk.page_content.encode()).hexdigest()
             for chunk in all_child_items
         ]
-        existing_hashes = await self.hash_storage.batch_check_duplicates(
-            all_hashes, file_hash, knowledge_base_id, user_id
-        )
+        new_child_items = all_child_items
+        new_hashes = all_hashes
 
-        # ========== 3. 过滤出新子块（未被其他文件使用过的） ==========
-        new_child_items = []
-        new_hashes = []
-
-        for child_chunk in all_child_items:
-            child_hash = hashlib.sha256(child_chunk.page_content.encode()).hexdigest()
-            if child_hash in existing_hashes:
-                logger.debug(f"子块已被其他文件使用，跳过: {child_hash[:16]}...")
-                continue
-
-            new_child_items.append(child_chunk)
-            new_hashes.append(child_hash)
-
-        # ========== 4-6. 并行执行独立的数据库操作 ==========
+        # ========== 3-6. 并行执行独立的数据库操作 ==========
         # 注意：批量添加新哈希依赖文件元数据（已存在），可以与 Milvus 和 PostgreSQL 并行
         tasks = []
         

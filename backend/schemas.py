@@ -16,6 +16,8 @@ class FileItem(BaseModel):
     """文件信息"""
     file_hash: str
     file_name: str
+    status: Optional[str] = None
+    error: Optional[str] = None
     uploaded_at: datetime
 
 class GetKnowledgeBaseFilesResponse(BaseModel):

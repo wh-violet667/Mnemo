@@ -190,10 +190,19 @@ class PostgreSQLParentClient:
                             file_name VARCHAR(255) NOT NULL,
                             knowledge_base_id VARCHAR(128) NOT NULL,
                             user_id INTEGER NOT NULL,
+                            status VARCHAR(20) NOT NULL DEFAULT 'processing',
+                            error TEXT,
                             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             PRIMARY KEY (file_hash, knowledge_base_id, user_id),
                             FOREIGN KEY (knowledge_base_id, user_id) REFERENCES knowledge_bases(knowledge_base_id, user_id) ON DELETE CASCADE
-                        );               
+                        );
+                        ALTER TABLE file_metadata
+                            ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'ready';
+                        ALTER TABLE file_metadata
+                            ADD COLUMN IF NOT EXISTS error TEXT;
+                        ALTER TABLE file_metadata
+                            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
                         
                         -- 5. 父块表（关联文件，支持级联删除）
                         CREATE TABLE IF NOT EXISTS parent_chunks (
@@ -838,10 +847,17 @@ class PostgreSQLParentClient:
                     # 3. 最后添加文件元数据
                     await conn.execute(
                         """
-                        INSERT INTO file_metadata (file_hash, file_name, knowledge_base_id, user_id)
-                        VALUES ($1, $2, $3, $4)
-                        ON CONFLICT (file_hash, knowledge_base_id, user_id) DO UPDATE 
-                        SET file_name = EXCLUDED.file_name
+                        INSERT INTO file_metadata (
+                            file_hash, file_name, knowledge_base_id, user_id,
+                            status, error, uploaded_at, updated_at
+                        )
+                        VALUES ($1, $2, $3, $4, 'processing', NULL, NOW(), NOW())
+                        ON CONFLICT (file_hash, knowledge_base_id, user_id) DO UPDATE
+                        SET file_name = EXCLUDED.file_name,
+                            status = 'processing',
+                            error = NULL,
+                            uploaded_at = NOW(),
+                            updated_at = NOW()
                     """,
                         file_hash,
                         file_name,
@@ -855,6 +871,39 @@ class PostgreSQLParentClient:
         except Exception as e:
             logger.error(f"Error adding file metadata: {e}")
             raise
+
+    async def update_file_status(
+        self,
+        file_hash: str,
+        knowledge_base_id: str,
+        user_id: int,
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        """更新文档处理状态；失败状态用于前端展示和人工重试。"""
+
+        if not self.pool:
+            return
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE file_metadata
+                    SET status = $1,
+                        error = $2,
+                        updated_at = NOW()
+                    WHERE file_hash = $3
+                      AND knowledge_base_id = $4
+                      AND user_id = $5
+                    """,
+                    status,
+                    error,
+                    file_hash,
+                    knowledge_base_id,
+                    user_id,
+                )
+        except Exception as e:
+            logger.warning(f"更新文件状态失败: {e}")
 
     async def delete_file(
         self, file_hash: str, knowledge_base_id: str, user_id: int
@@ -951,7 +1000,7 @@ class PostgreSQLParentClient:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT file_hash, file_name, uploaded_at
+                    SELECT file_hash, file_name, status, error, uploaded_at, updated_at
                     FROM file_metadata
                     WHERE knowledge_base_id = $1 AND user_id = $2
                     ORDER BY uploaded_at DESC

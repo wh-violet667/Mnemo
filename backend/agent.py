@@ -6,7 +6,9 @@ import time
 import re
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
+from langgraph.types import Overwrite
 import config
 from typing import AsyncGenerator
 from tools import search_knowledge_base, get_memory, get_raw_conversation_by_summary_id
@@ -165,6 +167,67 @@ async def get_or_create_agent(checkpointer: AsyncRedisSaver):
                 )
     logger.info(f"创建全局agent实例耗时: {time.time() - start_time} 秒")
     return _global_agent
+
+
+async def delete_thread_checkpoint(thread_id: str) -> bool:
+    """删除会话对应的 Redis checkpoint，避免删除后旧上下文复活。"""
+
+    try:
+        checkpointer = await get_checkpointer()
+        await checkpointer.adelete_thread(thread_id)
+        logger.info(f"已删除 Redis checkpoint: {thread_id}")
+        return True
+    except Exception as e:
+        logger.error(f"删除 Redis checkpoint 失败 {thread_id}: {e}", exc_info=True)
+        return False
+
+
+async def trim_last_turn_checkpoint(thread_id: str) -> bool:
+    """从 checkpoint 中裁掉最后一轮 human/assistant 消息。
+
+    重新生成只删 PostgreSQL 的最后一轮是不够的；Redis checkpoint 仍会让
+    Agent 看到旧的一轮。这里用 Overwrite 替换 messages 通道，保留更早的
+    多轮上下文；失败时降级为删除整个线程，宁可少上下文也不要重复上下文。
+    """
+
+    try:
+        checkpointer = await get_checkpointer()
+        agent = await get_or_create_agent(checkpointer)
+        config = {"configurable": {"thread_id": thread_id}}
+        snapshot = await agent.aget_state(config)
+        messages = list(snapshot.values.get("messages", []))
+
+        def is_human(message) -> bool:
+            if isinstance(message, HumanMessage):
+                return True
+            return isinstance(message, dict) and message.get("role") == "human"
+
+        last_human = None
+        for index in range(len(messages) - 1, -1, -1):
+            if is_human(messages[index]):
+                last_human = index
+                break
+
+        if last_human is None:
+            return True
+
+        trimmed = messages[:last_human]
+        if len(trimmed) == len(messages):
+            return True
+
+        await agent.aupdate_state(
+            config,
+            {"messages": Overwrite(value=trimmed)},
+        )
+        logger.info(
+            f"已裁剪 checkpoint {thread_id}: {len(messages)} -> {len(trimmed)} 条消息"
+        )
+        return True
+    except Exception as e:
+        logger.warning(
+            f"裁剪 checkpoint 失败 {thread_id}: {e}；降级删除整个线程"
+        )
+        return await delete_thread_checkpoint(thread_id)
 
 
 async def stream_agent_response(
