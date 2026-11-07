@@ -427,6 +427,7 @@ DEFAULTS = {
     "memory_count": 0,
     "memory_error": "",
     "active_stream": None,
+    "retrieval_mode": "auto",
     "history_loaded_for": None,
     "confirm_delete_kb": False,
     "confirm_delete_chat": False,
@@ -752,6 +753,7 @@ def _start_stream(text: str, append_user: bool) -> None:
         knowledge_base_id=st.session_state.selected_kb,
         conversation_id=st.session_state.conversation_id,
         previous_messages=previous_messages,
+        retrieval_mode=st.session_state.get("retrieval_mode", "auto"),
     )
     st.session_state.active_stream = session
     session.start()
@@ -812,6 +814,7 @@ def render_message(
     streaming: bool = False,
     sources_from_previous_turn: bool = False,
     anchor_key: str = "msg",
+    trace: Optional[Dict[str, Any]] = None,
 ) -> str:
     if role == "user":
         return (
@@ -844,6 +847,24 @@ def render_message(
         ),
         rendered,
     )
+
+    trace_html = ""
+    if isinstance(trace, dict) and trace.get("mode"):
+        mode_label = {"fast": "快速", "deep": "深入", "auto": "自动"}.get(
+            str(trace.get("mode")), str(trace.get("mode"))
+        )
+        elapsed_s = (trace.get("elapsed_ms") or 0) / 1000
+        parts = [
+            f"本次：{mode_label}",
+            f"{trace.get('rounds', '?')} 轮",
+            f"{trace.get('parent_count', '?')} 条证据",
+            f"{elapsed_s:.1f}s",
+        ]
+        if trace.get("escalated"):
+            parts.append("无结果已升级深入")
+        if trace.get("degraded"):
+            parts.append("Agentic 关闭已降级")
+        trace_html = f"<div class='source-note'>{' · '.join(parts)}</div>"
 
     source_html = ""
     if sources_from_previous_turn and sources:
@@ -889,6 +910,7 @@ def render_message(
         "<div class='msg-body'>"
         f"<div class='msg-name'>Mnemo {status}</div>"
         f"<div class='answer'>{rendered}</div>"
+        f"{trace_html}"
         f"{source_html}"
         "</div></div>"
     )
@@ -974,6 +996,13 @@ def render_composer() -> None:
         "<div class='hintline'>Ctrl + Enter 发送 · Enter 换行 · 回答会标注来源</div>",
         unsafe_allow_html=True,
     )
+    st.segmented_control(
+        "检索模式",
+        options=["auto", "fast", "deep"],
+        format_func=lambda m: {"auto": "自动", "fast": "快速", "deep": "深入"}[m],
+        key="retrieval_mode",
+        label_visibility="collapsed",
+    )
     if submitted and prompt.strip():
         send_query(prompt)
 
@@ -1005,6 +1034,7 @@ def finalize_stream(session: StreamSession) -> None:
             "content": answer or "❌ 没有收到回答",
             "sources": sources,
             "sources_from_previous_turn": sources_from_previous_turn,
+            "trace": snap.get("trace"),
             "error": bool(error),
             "stopped": stopped,
             "timestamp": datetime.now().strftime("%H:%M"),
@@ -1030,6 +1060,7 @@ def render_live_stream() -> None:
                 snap["sources"],
                 streaming=True,
                 anchor_key="live",
+                trace=snap.get("trace"),
             ),
             unsafe_allow_html=True,
         )
@@ -1609,6 +1640,7 @@ with chat_col:
                             "sources_from_previous_turn", False
                         ),
                         anchor_key=f"m{index}",
+                        trace=message.get("trace"),
                     ),
                     unsafe_allow_html=True,
                 )

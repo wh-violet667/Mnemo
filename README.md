@@ -158,6 +158,21 @@ cd backend
 - 会话表记录标题和最近使用的知识库，刷新后可以恢复。
 - 回答只下发被 `[n]` 引用的来源，避免把 top-k 无关文档全部塞给用户；来源随消息落库，刷新后仍能显示。
 
+### 检索模式（fast / auto / deep）
+
+Agentic-lite：多轮反思封装在 `search_knowledge_base` 工具内部，对 Agent 仍是一次调用。
+
+| 模式 | 行为 | 适用 |
+|---|---|---|
+| `fast` | 一次 hybrid + 统一 rerank，绝不升级 | 简单单跳 |
+| `deep` | Plan → Retrieve → Critique → Refine，最多 2 轮，统一 rerank 一次 | 比较/版本/多实体等复杂问题 |
+| `auto`（默认） | 规则命中复杂特征走 deep；否则先 fast，0 父块时在请求内升级一次 deep | 日常默认 |
+
+- 轮次/预算上限与开关由环境变量控制：`AGENTIC_ENABLED`（false 时 deep/auto 降级 fast）、`AGENTIC_MAX_ROUNDS`（默认 2，上限 3）、`AGENTIC_TIMEOUT_MS`（默认 12000）。
+- planner / critic 使用 `SUMMARIZATION_MODEL`（低成本），不让主模型三次调用。
+- 每次检索附 `trace` 流式事件（模式、轮次、证据数、耗时），前端回答下方展示"本次：深入 · 2 轮 · 8 条证据"；旧前端忽略该事件也能正常工作。
+- 达到轮次或预算上限时仍返回已有证据并提示"证据可能不足"，不会返回空答案。
+
 ## 快速开始
 
 ```bash
@@ -301,6 +316,18 @@ python evals/run_eval.py --kb-id eval-kb --mode hybrid+rerank
 ```
 
 输出 Recall@5、MRR、P50/P95，以及未命中样本。详细说明见 [`evals/README.md`](evals/README.md)。
+
+Agentic-lite 评测集（`evals/golden_agentic.jsonl`，33 条：10 多跳 + 8 关系 + 6 时间 + 4 不可回答 + 5 单跳回归，按 `expected_parent_ids` 判定）：
+
+```bash
+# A/B 对比（baseline 为现产 hybrid+rerank 链路）
+python evals/run_eval.py --golden evals/golden_agentic.jsonl --mode hybrid+rerank
+python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode fast
+python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode deep
+python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode auto
+```
+
+额外输出分类型 Recall/MRR、平均检索轮次、auto 升级率与规则误判率、不可回答样本的噪声控制。
 
 > 这是合成评测集，用于验证流水线和做消融，不代表真实业务效果。真实项目需要用业务文档重新标注 golden set。
 

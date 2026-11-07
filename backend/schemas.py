@@ -114,6 +114,9 @@ class ContextSchema:
     knowledge_base_id: str
     top_k: int = 5
     conversation_id: str = "default"
+    # 检索模式 fast/auto/deep；有效默认值在 api.py 由 AGENTIC_DEFAULT_MODE 解析，
+    # 这里的 "auto" 只是数据类兜底，不作为决策点。
+    retrieval_mode: str = "auto"
     # 本次请求检索到的来源，供流式结束时下发给前端做引用展示。
     # 用可变 list 是有意的：工具里直接 append，请求结束后读取。
     sources: List[Dict[str, Any]] = field(default_factory=list)

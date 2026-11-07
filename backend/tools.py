@@ -1,8 +1,8 @@
 import asyncio
-from citations import build_numbered_context, dedupe_documents, order_by_rerank
-from documents_process import rerank_documents
+from dataclasses import asdict
 from postgresql_client import get_postgresql_client
 from milvus_client import get_milvus_client
+from retrieval import load_agentic_config, run_retrieval
 import logging
 import sys
 from langgraph.config import get_stream_writer
@@ -137,63 +137,50 @@ async def search_knowledge_base(
     user_id = runtime.context.user_id
     knowledge_base_id = runtime.context.knowledge_base_id
     top_k = runtime.context.top_k
+    mode = runtime.context.retrieval_mode or "auto"
 
-    logger.info(f"用户 {user_id} 查询知识库 {knowledge_base_id}: {query}")
+    logger.info(f"用户 {user_id} 查询知识库 {knowledge_base_id}: {query}（mode={mode}）")
     writer = get_stream_writer()
     writer(f"🔍 正在检索知识库【{knowledge_base_id}】...")
-    logger.info(f"{'---'*20}开始混合检索hybrid_retrieval_knowledge_base{'---'*20}")
     start_time = time.time()
 
-    # 使用全局 Milvus 客户端
-    milvus_client = await get_milvus_client()
-    parent_chunkId_list = await milvus_client.hybrid_retrieval_knowledge_base(
-        query=query, knowledge_base_id=knowledge_base_id, top_k=top_k, user_id=user_id
-    )
-
-    logger.info(
-        f"{'---'*20}开始从PostgreSQL获取父块get_parents，一共需要检索出{len(parent_chunkId_list)}个父块{'---'*20}"
-    )
-
-    if not parent_chunkId_list:
-        writer("⚠️ 未检索到相关文档，请尝试更换关键词或稍后再试。")
-        logger.info(f"{'---'*20}未检索到相关文档{'---'*20}")
-        return "未检索到相关文档"
-
-    # 使用全局 PostgreSQL 客户端
-    postgresql_client = await get_postgresql_client()
-    parent_documents = await postgresql_client.get_parents(
-        knowledge_base_id=knowledge_base_id,
-        parent_ids=parent_chunkId_list,
+    agentic = load_agentic_config()
+    result = await run_retrieval(
+        query,
         user_id=user_id,
+        knowledge_base_id=knowledge_base_id,
+        top_k=top_k,
+        mode=mode,
+        start_index=len(runtime.context.sources) + 1,
+        max_rounds=agentic["max_rounds"],
+        max_queries=agentic["max_queries"],
+        budget_ms=agentic["budget_ms"],
+        enabled=agentic["enabled"],
     )
 
-    if not parent_documents:
-        writer("⚠️ 检索到片段但未能取回原文，请稍后再试。")
-        logger.info(f"{'---'*20}父块为空{'---'*20}")
-        return "未检索到相关文档"
+    if result.sources:
+        runtime.context.sources.extend(result.sources)
 
-    # 重排序父块。输入纯文本，结果里的 index 用来映射回文件名。
-    logger.info(f"{'---'*20}开始重排序父块rerank_documents{'---'*20}")
-    rerank_result = await rerank_documents(
-        query, [doc["text"] for doc in parent_documents], top_k
-    )
-
-    ranked_documents = order_by_rerank(parent_documents, rerank_result)
-    ranked_documents = dedupe_documents(ranked_documents)[:top_k]
-
-    snippets, sources = build_numbered_context(
-        ranked_documents, start_index=len(runtime.context.sources) + 1
-    )
-    if not snippets:
-        return "未检索到相关文档"
-
-    runtime.context.sources.extend(sources)
+    # trace 与 status 分开发送；trace 始终下发，便于排查未命中与升级行为
+    writer({"type": "trace", "content": asdict(result.trace)})
 
     end_time = time.time()
     writer(f"✓ 检索完成，本次检索耗时{end_time - start_time:.2f}秒")
-    logger.info(f"{'---'*20}检索完成{'---'*20}")
+    logger.info(
+        f"{'---'*20}检索完成 mode={result.trace.mode} rounds={result.trace.rounds} "
+        f"parents={result.trace.parent_count}{'---'*20}"
+    )
 
-    return f"检索到的相关文档如下（回答时请用方括号编号标注来源）：\n{snippets}"
+    if not result.snippets:
+        writer("⚠️ 未检索到相关文档，请尝试更换关键词或稍后再试。")
+        return "未检索到相关文档"
+    if result.sufficient is False:
+        return (
+            "【检索提示】证据可能不足。以下内容仅供回答参考；"
+            "如果仍然无法回答，请明确说明未在知识库中找到相关信息。\n\n"
+            + result.snippets
+        )
+    return f"检索到的相关文档如下（回答时请用方括号编号标注来源）：\n{result.snippets}"
 
 """rerank_result的结构示例：
 {'output': {'results': [{'document': {'text': '20 世纪80 年代末'}, 'index': 0, 

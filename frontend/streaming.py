@@ -24,13 +24,16 @@ class StreamSession:
         knowledge_base_id: str,
         conversation_id: str,
         previous_messages: List[Dict[str, Any]],
+        retrieval_mode: str = "auto",
     ) -> None:
         self.query = query
         self.knowledge_base_id = knowledge_base_id
         self.conversation_id = conversation_id
         self.previous_messages = previous_messages
+        self.retrieval_mode = retrieval_mode
         self.answer = ""
         self.sources: List[Dict[str, Any]] = []
+        self.trace: Optional[Dict[str, Any]] = None
         self.status = "正在连接…"
         self.error = ""
         self.done = False
@@ -44,6 +47,7 @@ class StreamSession:
             return {
                 "answer": self.answer,
                 "sources": list(self.sources),
+                "trace": self.trace,
                 "status": self.status,
                 "error": self.error,
                 "done": self.done,
@@ -72,6 +76,7 @@ class StreamSession:
             "user_id": USER_ID,
             "conversation_id": self.conversation_id,
             "top_k": 5,
+            "retrieval_mode": self.retrieval_mode,
         }
         response: Optional[requests.Response] = None
         try:
@@ -102,6 +107,8 @@ class StreamSession:
                     with self.lock:
                         if not self.answer:
                             self.status = str(content)
+                elif event_type == "trace":
+                    self._set(trace=content if isinstance(content, dict) else None)
                 elif event_type == "answer":
                     with self.lock:
                         self.answer += str(content)

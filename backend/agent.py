@@ -236,6 +236,8 @@ async def stream_agent_response(
     user_id: int,
     conversation_id: str = "default",
     background_tasks: BackgroundTasks = None,
+    *,
+    retrieval_mode: str,
 ) -> AsyncGenerator[str, None]:
     # 1. 获取进程级 checkpointer
     start_time = time.time()
@@ -255,6 +257,7 @@ async def stream_agent_response(
             knowledge_base_id=knowledge_base_id,
             top_k=5,
             conversation_id=conversation_id,
+            retrieval_mode=retrieval_mode,
         )
         async for chunk in agent.astream(
             {"messages": [{"role": "user", "content": user_message}]},
@@ -287,10 +290,17 @@ async def stream_agent_response(
             # ---------------- 工具状态（显示agent的执行过程，避免静默思考） ----------------
             elif stream_mode == "custom":
                 custom_info = chunk_data
-                logger.info(f"【工具信息】: {custom_info}")
-                yield json.dumps(
-                    {"type": "status", "content": custom_info}, ensure_ascii=False
-                ) + "\n"
+                if isinstance(custom_info, dict) and custom_info.get("type") == "trace":
+                    yield json.dumps(
+                        {"type": "trace", "content": custom_info.get("content", {})},
+                        ensure_ascii=False,
+                    ) + "\n"
+                else:
+                    logger.info(f"【工具信息】: {custom_info}")
+                    yield json.dumps(
+                        {"type": "status", "content": custom_info},
+                        ensure_ascii=False,
+                    ) + "\n"
 
         # 循环结束后，合并所有ai回复部分
         ai_message = "".join(ai_message_parts)

@@ -14,7 +14,7 @@ from fastapi import (
     status,
     Depends,
 )
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Literal
 import logging
 import sys
 import asyncio
@@ -30,6 +30,7 @@ from agent import (
     trim_last_turn_checkpoint,
 )
 from conversations import make_thread_id, normalize_conversation_id
+from retrieval import load_agentic_config
 from schemas import (
     DocumentUploadResponse,
     DocumentDeleteResponse,
@@ -665,6 +666,7 @@ async def chat_with_agent(
     knowledge_base_id: str,
     user_id: int,
     conversation_id: str = "default",
+    retrieval_mode: Optional[Literal["auto", "fast", "deep"]] = None,
     background_tasks: BackgroundTasks = None,
     postgresql_client=Depends(get_postgresql_client),
 ):
@@ -673,6 +675,7 @@ async def chat_with_agent(
 
     conversation_id 用于隔离上下文；同一个用户的不同会话各自拥有独立的
     Redis checkpoint（thread_id = user_id:conversation_id）。
+    retrieval_mode 缺省时回落到 AGENTIC_DEFAULT_MODE 环境变量（默认 auto）。
     """
     try:
         conversation_id = normalize_conversation_id(conversation_id)
@@ -691,6 +694,8 @@ async def chat_with_agent(
     except Exception as e:
         logger.warning(f"更新会话标题失败: {e}")
 
+    resolved_mode = retrieval_mode or load_agentic_config()["default_mode"]
+
     return StreamingResponse(
         stream_agent_response(
             user_message=query,
@@ -698,6 +703,7 @@ async def chat_with_agent(
             user_id=user_id,
             conversation_id=conversation_id,
             background_tasks=background_tasks,
+            retrieval_mode=resolved_mode,
         ),
         media_type="text/plain; charset=utf-8",
     )
