@@ -524,6 +524,21 @@ async def update_conversation_knowledge_base(
     }
 
 
+@router.delete("/conversations/{conversation_id}/last-turn")
+async def delete_last_turn(
+    conversation_id: str,
+    user_id: int,
+    postgresql_client=Depends(get_postgresql_client),
+):
+    """删除最后一轮问答；前端重新生成前调用，避免数据库重复记录。"""
+    try:
+        conversation_id = normalize_conversation_id(conversation_id)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    deleted = await postgresql_client.delete_last_turn(conversation_id, user_id)
+    return {"status": "success", "deleted": deleted}
+
+
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
     conversation_id: str,

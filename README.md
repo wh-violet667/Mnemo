@@ -15,7 +15,7 @@
 
 ![Mnemo 对话与记忆抽屉](assets/demo.png)
 
-*演示数据：`eval-kb` 中的 10 份合成 PDF，以及 5 条种子长期记忆；运行后还会从对话中自动抽取新记忆。*
+*演示数据：`eval-kb` 中的 10 份合成 PDF，以及 17 条长期记忆（5 条种子 + 12 条自动抽取）。*
 
 ## 这个项目解决什么
 
@@ -24,10 +24,11 @@
 1. **聊过就忘**：每次对话都重新检索，不知道用户上次说过什么偏好。
 2. **答了但不可信**：回答看起来很流畅，却指不出信息来自哪份文档。
 
-Mnemo 围绕这两点做了三件事：
+Mnemo 围绕这两点做了四件事：
 
 - **长期记忆**：摘要、语义、情节、程序四类记忆 + 用户画像，后台定时压缩对话并提取；右侧记忆抽屉可查看分类、刷新和删除。
-- **可追溯检索**：父子块 + BM25/稠密混合检索 + RRF + `qwen3-rerank`，回答用 `[1]` 标注来源，前端展示来源文件。
+- **可追溯检索**：父子块 + BM25/稠密混合检索 + RRF + `qwen3-rerank`，回答用 `[1]` 标注来源；引用编号可跳转，来源卡片可展开。
+- **可交互流式**：回答生成过程中可停止，完成后可复制、重新生成；失败或停止后可重试。
 - **多会话隔离**：每个会话独立 Redis checkpoint，刷新/切换会话不会串上下文。
 
 ## 可验证的结果
@@ -224,7 +225,7 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 1. 创建一个知识库。
 2. 上传 PDF / DOCX，等待后台解析、分块、向量化。
 3. 选择知识库，提问。
-4. 回答里的 `[1]` 对应下方的来源文件卡片。
+4. 点击回答里的 `[1]` 跳到下方来源卡片；来源卡片可展开/收起。
 5. 新建/切换会话，验证上下文隔离。
 6. 点侧栏「记忆」打开右侧抽屉，按语义/情节/程序/摘要筛选，或删除某条记忆。
 
@@ -235,7 +236,7 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 | 对话 | `GET /chat_with_agent/stream` |
 | 知识库 | `POST/GET /knowledge-bases`、`DELETE /knowledge-bases/{id}` |
 | 文件 | `POST /document_upload`、`GET /knowledge-bases/{id}/files`、`DELETE /knowledge-bases/{id}/documents/{hash}` |
-| 会话 | `POST/GET /conversations`、`PATCH/DELETE /conversations/{id}`、`PATCH /conversations/{id}/knowledge-base`、`GET /conversations/{id}/messages` |
+| 会话 | `POST/GET /conversations`、`PATCH/DELETE /conversations/{id}`、`PATCH /conversations/{id}/knowledge-base`、`DELETE /conversations/{id}/last-turn`、`GET /conversations/{id}/messages` |
 | 记忆 | `GET /memories?user_id=1&memory_type=semantic`、`DELETE /memories/{id}?user_id=1` |
 
 流式返回示例：
@@ -299,7 +300,8 @@ Mnemo/
 │   ├── settings.py              # 启动前环境变量校验
 │   └── main.py                  # 应用入口
 ├── frontend/
-│   └── app.py                   # Streamlit 界面：对话 + 记忆抽屉
+│   ├── app.py                   # Streamlit 界面：对话 + 记忆抽屉
+│   └── streaming.py             # 后台流式读取与停止控制
 ├── assets/                      # README 截图
 ├── evals/
 │   ├── build_corpus.py          # 生成评测 PDF
@@ -319,7 +321,7 @@ Mnemo/
 - **单用户演示**：`MNEMO_USER_ID` 默认 1，没有登录和租户隔离，不能直接公开部署。
 - **评测集是合成的**：30 条问题规模小，版本区分题仍然会失败；需要真实文档和更大样本。
 - **没有 CI**：目前依靠本地 pytest 和手动评测，没有 GitHub Actions 门禁。
-- **前端是单文件**：`frontend/app.py` 约 1400 行，CSS 与状态都在同一文件，后续应拆分组件和状态管理。
+- **前端仍以单文件为主**：请求流已拆到 `frontend/streaming.py`，但 `frontend/app.py` 仍承担约 1600 行 UI/CSS/状态，后续应继续拆分组件与状态。
 - **rerank 有延迟成本**：`qwen3-rerank` 带来约 1 秒 P95 增加，适合对排序质量敏感的场景。
 - **依赖外部服务**：DashScope 和 Zilliz 都是云服务，离线环境需要替换为本地模型/本地 Milvus。
 

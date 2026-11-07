@@ -15,8 +15,11 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import bleach
 import requests
 import streamlit as st
+
+from streaming import StreamSession
 
 API_BASE_URL = os.getenv("MNEMO_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 USER_ID = int(os.getenv("MNEMO_USER_ID", "1"))
@@ -33,6 +36,21 @@ FILTER_TO_TYPE["全部"] = ""
 
 CHAT_HEIGHT = 560
 MEMORY_HEIGHT = 800
+
+MARKDOWN_TAGS = {
+    "p", "br", "hr", "strong", "em", "del", "blockquote",
+    "ul", "ol", "li", "code", "pre",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "table", "thead", "tbody", "tr", "th", "td",
+    "a", "sup", "sub",
+}
+MARKDOWN_ATTRS = {
+    "a": ["href", "title"],
+    "code": ["class"],
+    "pre": ["class"],
+    "th": ["align"],
+    "td": ["align"],
+}
 
 st.set_page_config(
     page_title="Mnemo",
@@ -197,24 +215,50 @@ CSS = """
   .answer p:last-child { margin-bottom: 0; }
   .answer ul, .answer ol { margin: 4px 0 8px 1.2rem; }
   .cite {
-    display: inline-flex; align-items: center; justify-content: center; min-width: 16px;
-    height: 16px; padding: 0 4px; margin: 0 1px; border-radius: 4px;
-    background: #e4f2ee; color: #0f766e; font: 10px ui-monospace, Consolas, monospace;
-    vertical-align: 1px;
+    display: inline-flex; align-items: center; justify-content: center; min-width: 17px;
+    height: 17px; padding: 0 4px; margin: 0 1px; border-radius: 4px;
+    background: #e4f2ee; color: #0f766e; font: .72rem ui-monospace, Consolas, monospace;
+    vertical-align: 1px; text-decoration: none;
   }
+  .cite:hover { background: #cfe9e2; }
   .source-card {
     margin-top: 10px; background: #fffdf9; border: 1px solid #e3dbce;
-    border-radius: 10px; padding: 9px 11px; display: flex; gap: 9px; align-items: flex-start;
-    max-width: 520px;
+    border-radius: 10px; max-width: 560px; overflow: hidden;
   }
+  .source-summary {
+    display: flex; gap: 9px; align-items: flex-start; padding: 9px 11px;
+    cursor: pointer; list-style: none; outline: none;
+  }
+  .source-summary::-webkit-details-marker { display: none; }
+  .source-summary:hover { background: #faf4eb; }
+  .source-head { min-width: 0; flex: 1; }
   .file-icon {
     width: 30px; height: 34px; border-radius: 6px; background: #f4e6de;
     color: #9e4c32; display: grid; place-items: center; flex: 0 0 auto; font-size: .72rem;
   }
   .source-name { font-size: .78rem; font-weight: 700; color: var(--ink); }
   .source-meta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+  .source-toggle {
+    margin-left: auto; color: var(--accent-dark); font-size: .72rem; white-space: nowrap;
+  }
+  .source-toggle::before { content: "展开"; }
+  .source-card[open] .source-toggle::before { content: "收起"; }
   .source-note { margin-top: 8px; font-size: .72rem; color: #6f665b; }
-  .source-snippet { font-size: .72rem; color: #6d6458; margin-top: 4px; line-height: 1.45; }
+  .source-snippet {
+    font-size: .72rem; color: #6d6458; line-height: 1.5;
+    padding: 0 11px 10px 50px; max-height: 220px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  div[class*="st-key-msg_actions_"] { margin: -10px 0 10px; }
+  div[class*="st-key-msg_actions_"] button {
+    background: transparent !important; border: 0 !important;
+    color: var(--muted) !important; font-size: .72rem !important;
+    min-height: 24px !important; padding: 2px 4px !important;
+    box-shadow: none !important; white-space: nowrap !important;
+  }
+  div[class*="st-key-msg_actions_"] button:hover {
+    color: var(--accent-dark) !important; background: #f6ede5 !important;
+  }
   .memory-hit {
     margin-top: 8px; display: inline-flex; align-items: center; gap: 5px;
     font-size: .72rem; color: #5f574d; background: #efe7db; border-radius: 999px; padding: 3px 8px;
@@ -311,6 +355,7 @@ CSS = """
   .mem-score { margin-left: auto; font: .72rem ui-monospace, Consolas, monospace; color: #6f665b; }
   .mem-content { font-size: .74rem; line-height: 1.5; color: #3a332c; }
   .mem-meta { display: flex; gap: 5px; margin-top: 5px; color: #6f665b; font-size: .72rem; }
+  .mem-confirm { margin: 2px 0 6px; color: #9a4229; font-size: .72rem; }
   .mem-more { margin-top: 3px; }
   .mem-more summary {
     list-style: none; cursor: pointer; color: var(--accent-dark);
@@ -381,9 +426,10 @@ DEFAULTS = {
     "memories": [],
     "memory_count": 0,
     "memory_error": "",
-    "pending_query": None,
+    "active_stream": None,
     "history_loaded_for": None,
     "confirm_delete_kb": False,
+    "confirm_delete_chat": False,
 }
 
 
@@ -617,6 +663,7 @@ def new_conversation() -> None:
         st.session_state.history_loaded_for = conversation["conversation_id"]
         st.session_state.selected_kb = kb
         st.session_state.kb_widget = kb
+        st.session_state.confirm_delete_chat = False
         cache_kb_files(kb)
         st.rerun()
     except Exception as exc:
@@ -636,6 +683,7 @@ def select_conversation(conversation: Dict[str, Any]) -> None:
     st.session_state.selected_kb = kb
     st.session_state.kb_widget = kb
     st.session_state.history_loaded_for = conversation_id
+    st.session_state.confirm_delete_chat = False
     cache_kb_files(kb)
     st.rerun()
 
@@ -672,22 +720,87 @@ def delete_current_conversation() -> None:
     st.rerun()
 
 
-def send_query(text: str) -> None:
-    text = (text or "").strip()
-    if not text:
+def _last_user_content(messages: List[Dict[str, Any]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return message.get("content", "")
+    return ""
+
+
+def _start_stream(text: str, append_user: bool) -> None:
+    if st.session_state.get("active_stream"):
         return
     if not st.session_state.conversation_id:
         new_conversation()
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": text,
-            "sources": [],
-            "timestamp": datetime.now().strftime("%H:%M"),
-        }
+
+    messages = st.session_state.messages
+    previous_messages = [
+        message for message in messages if message.get("role") == "assistant"
+    ]
+    if append_user:
+        messages.append(
+            {
+                "role": "user",
+                "content": text,
+                "sources": [],
+                "timestamp": datetime.now().strftime("%H:%M"),
+            }
+        )
+
+    session = StreamSession(
+        query=text,
+        knowledge_base_id=st.session_state.selected_kb,
+        conversation_id=st.session_state.conversation_id,
+        previous_messages=previous_messages,
     )
-    st.session_state.pending_query = text
+    st.session_state.active_stream = session
+    session.start()
     st.rerun()
+
+
+def send_query(text: str) -> None:
+    text = (text or "").strip()
+    if not text or st.session_state.get("active_stream"):
+        return
+    _start_stream(text, append_user=True)
+
+
+def regenerate_last_answer() -> None:
+    messages = st.session_state.messages
+    if not messages or messages[-1].get("role") != "assistant":
+        return
+    if st.session_state.get("active_stream"):
+        return
+    user_text = _last_user_content(messages[:-1])
+    if not user_text:
+        return
+
+    try:
+        api(
+            "DELETE",
+            f"/conversations/{st.session_state.conversation_id}/last-turn",
+            params={"user_id": USER_ID},
+            timeout=10,
+        )
+    except Exception as exc:
+        st.error(f"重新生成失败：{exc}")
+        return
+
+    messages.pop()
+    _start_stream(user_text, append_user=False)
+
+
+def retry_last_answer() -> None:
+    messages = st.session_state.messages
+    if not messages or messages[-1].get("role") != "assistant":
+        return
+    if st.session_state.get("active_stream"):
+        return
+    user_text = _last_user_content(messages[:-1])
+    if not user_text:
+        return
+    messages.pop()
+    _start_stream(user_text, append_user=False)
 
 
 # ---------------------------------------------------------------- rendering
@@ -698,6 +811,7 @@ def render_message(
     timestamp: str = "",
     streaming: bool = False,
     sources_from_previous_turn: bool = False,
+    anchor_key: str = "msg",
 ) -> str:
     if role == "user":
         return (
@@ -711,11 +825,24 @@ def render_message(
 
     try:
         rendered = markdown(content or "", extensions=["fenced_code", "tables"])
+        rendered = bleach.clean(
+            rendered,
+            tags=MARKDOWN_TAGS,
+            attributes=MARKDOWN_ATTRS,
+            protocols={"http", "https", "mailto"},
+            strip=True,
+        )
     except Exception:
         rendered = html.escape(content or "")
 
+    anchor = html.escape(anchor_key or "msg")
     rendered = re.sub(
-        r"\[(\d+)\]", r"<span class='cite'>\1</span>", rendered
+        r"\[(\d+)\]",
+        lambda match: (
+            f"<a class='cite' href='#source-{anchor}-{match.group(1)}' "
+            f"title='查看来源 {match.group(1)}'>{match.group(1)}</a>"
+        ),
+        rendered,
     )
 
     source_html = ""
@@ -731,19 +858,24 @@ def render_message(
         icon = {"pdf": "PDF", "docx": "DOC", "doc": "DOC", "txt": "TXT"}.get(
             extension, "FILE"
         )
-        snippet = html.escape(str(source.get("snippet", ""))[:220])
+        snippet = html.escape(str(source.get("snippet", "")))
         score = source.get("score")
         meta = "引用片段"
         if isinstance(score, (int, float)):
             meta = f"相关度 {score:.3f}"
+        source_id = f"source-{anchor}-{index}"
         source_html += (
-            "<div class='source-card'>"
+            f"<details class='source-card' id='{source_id}' open>"
+            "<summary class='source-summary'>"
             f"<div class='file-icon'>{icon}</div>"
-            "<div><div class='source-name'>"
-            f"[{index}] {file_name}</div>"
+            "<div class='source-head'>"
+            f"<div class='source-name'>[{index}] {file_name}</div>"
             f"<div class='source-meta'>{meta}</div>"
+            "</div>"
+            "<span class='source-toggle'></span>"
+            "</summary>"
             f"<div class='source-snippet'>{snippet}</div>"
-            "</div></div>"
+            "</details>"
         )
 
     status = (
@@ -816,12 +948,14 @@ def render_header() -> None:
 
 
 def render_composer() -> None:
+    streaming = bool(st.session_state.get("active_stream"))
     with st.form("composer", clear_on_submit=True):
         prompt = st.text_area(
             "消息",
             height=62,
             placeholder="继续追问，或让我总结一份文档…",
             label_visibility="collapsed",
+            disabled=streaming,
         )
         col1, col2, col3 = st.columns([1.5, 1.5, 0.45])
         with col1:
@@ -833,7 +967,9 @@ def render_composer() -> None:
         with col2:
             st.markdown("<div class='composer-pill'>模型 · qwen-plus</div>", unsafe_allow_html=True)
         with col3:
-            submitted = st.form_submit_button("↑", use_container_width=False)
+            submitted = st.form_submit_button(
+                "↑", use_container_width=False, disabled=streaming
+            )
     st.markdown(
         "<div class='hintline'>Ctrl + Enter 发送 · Enter 换行 · 回答会标注来源</div>",
         unsafe_allow_html=True,
@@ -842,79 +978,26 @@ def render_composer() -> None:
         send_query(prompt)
 
 
-def stream_response(query: str) -> None:
-    status_box = st.empty()
-    answer_box = st.empty()
-    answer = ""
-    sources: List[Dict[str, Any]] = []
-    error = ""
+def finalize_stream(session: StreamSession) -> None:
+    snap = session.snapshot()
+    answer = snap["answer"].strip()
+    sources = snap["sources"]
+    error = snap["error"]
+    stopped = snap["stopped"]
 
-    params = {
-        "query": query,
-        "knowledge_base_id": st.session_state.selected_kb,
-        "user_id": USER_ID,
-        "conversation_id": st.session_state.conversation_id,
-        "top_k": 5,
-    }
+    sources_from_previous_turn = False
+    if not sources:
+        fallback = find_fallback_sources(session.previous_messages, answer)
+        if fallback:
+            sources = fallback
+            sources_from_previous_turn = True
 
-    try:
-        with requests.get(
-            f"{API_BASE_URL}/chat_with_agent/stream",
-            params=params,
-            stream=True,
-            timeout=180,
-        ) as response:
-            if response.status_code != 200:
-                raise RuntimeError(f"后端返回 {response.status_code}")
-            for line in response.iter_lines(decode_unicode=True):
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except Exception:
-                    continue
-                event_type = event.get("type")
-                content = event.get("content", "")
-                if event_type == "status":
-                    status_box.markdown(
-                        f"<div class='status-line'>{html.escape(str(content))}</div>",
-                        unsafe_allow_html=True,
-                    )
-                elif event_type == "answer":
-                    answer += str(content)
-                    status_box.empty()
-                    answer_box.markdown(
-                        render_message("assistant", answer, sources, streaming=True),
-                        unsafe_allow_html=True,
-                    )
-                elif event_type == "sources":
-                    sources = content if isinstance(content, list) else []
-                    answer_box.markdown(
-                        render_message("assistant", answer, sources, streaming=True),
-                        unsafe_allow_html=True,
-                    )
-                elif event_type == "error":
-                    error = str(content)
-    except Exception as exc:
-        error = str(exc)
-
-    status_box.empty()
     if error and not answer:
         answer = f"❌ {error}"
     elif error:
         answer = f"{answer}\n\n❌ {error}"
-
-    sources_from_previous_turn = False
-    if not sources:
-        previous_assistant = [
-            message
-            for message in st.session_state.messages
-            if message.get("role") == "assistant"
-        ]
-        fallback = find_fallback_sources(previous_assistant, answer)
-        if fallback:
-            sources = fallback
-            sources_from_previous_turn = True
+    if stopped:
+        answer = f"{answer}\n\n*（已停止生成）*".strip() if answer else "（已停止生成）"
 
     st.session_state.messages.append(
         {
@@ -922,14 +1005,92 @@ def stream_response(query: str) -> None:
             "content": answer or "❌ 没有收到回答",
             "sources": sources,
             "sources_from_previous_turn": sources_from_previous_turn,
+            "error": bool(error),
+            "stopped": stopped,
             "timestamp": datetime.now().strftime("%H:%M"),
         }
     )
+    st.session_state.active_stream = None
     refresh_conversations()
     st.rerun()
 
 
-# ---------------------------------------------------------------- memory panel
+@st.fragment(run_every=0.5)
+def render_live_stream() -> None:
+    session = st.session_state.get("active_stream")
+    if not session:
+        return
+    snap = session.snapshot()
+
+    if snap["answer"]:
+        st.markdown(
+            render_message(
+                "assistant",
+                snap["answer"],
+                snap["sources"],
+                streaming=True,
+                anchor_key="live",
+            ),
+            unsafe_allow_html=True,
+        )
+    elif snap["status"]:
+        st.markdown(
+            f"<div class='status-line'>{html.escape(snap['status'])}</div>",
+            unsafe_allow_html=True,
+        )
+
+    if snap["error"]:
+        st.markdown(
+            f"<div class='inline-error'>❌ {html.escape(snap['error'])}</div>",
+            unsafe_allow_html=True,
+        )
+
+    if snap["done"]:
+        finalize_stream(session)
+        return
+
+    stop_col, info_col = st.columns([1, 8])
+    with stop_col:
+        if st.button(
+            "停止",
+            key="stop_stream",
+            type="secondary",
+            use_container_width=False,
+        ):
+            session.stop()
+            st.rerun(scope="fragment")
+    with info_col:
+        st.caption("正在生成，可随时停止")
+
+
+def render_message_actions(
+    message: Dict[str, Any], index: int, is_last: bool
+) -> None:
+    if message.get("role") != "assistant":
+        return
+    with st.container(key=f"msg_actions_{index}"):
+        copy_col, action_col, _ = st.columns([1, 2, 7])
+        with copy_col:
+            with st.popover("复制", use_container_width=False):
+                st.code(message.get("content", ""), language=None)
+        if is_last:
+            with action_col:
+                if message.get("error") or message.get("stopped"):
+                    if st.button(
+                        "重试",
+                        key=f"retry_{index}",
+                        use_container_width=False,
+                    ):
+                        retry_last_answer()
+                else:
+                    if st.button(
+                        "重新生成",
+                        key=f"regen_{index}",
+                        use_container_width=False,
+                    ):
+                        regenerate_last_answer()
+
+
 def render_memory_panel() -> None:
     with st.container(height=MEMORY_HEIGHT, border=True, key="memory_panel"):
         title_col, refresh_col, close_col = st.columns(
@@ -1057,31 +1218,59 @@ def render_memory_panel() -> None:
                         "</div>",
                         unsafe_allow_html=True,
                     )
+                memory_id = memory.get("id")
+                confirm_key = f"confirm_mem_{memory_id}"
                 with action_col:
                     if st.button(
                         "✕",
-                        key=f"del_mem_{memory.get('id')}",
+                        key=f"del_mem_{memory_id}",
                         help="删除这条记忆",
                         type="tertiary",
                     ):
-                        try:
-                            api(
-                                "DELETE",
-                                f"/memories/{memory['id']}",
-                                params={"user_id": USER_ID},
-                                timeout=10,
-                            )
-                            st.session_state.memories = [
-                                item
-                                for item in st.session_state.memories
-                                if item.get("id") != memory.get("id")
-                            ]
-                            st.session_state.memory_count = len(
-                                st.session_state.memories
-                            )
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+
+                if st.session_state.get(confirm_key):
+                    st.markdown(
+                        "<div class='mem-confirm'>确认删除这条记忆？</div>",
+                        unsafe_allow_html=True,
+                    )
+                    yes_col, no_col, _ = st.columns([1, 1, 5])
+                    with yes_col:
+                        if st.button(
+                            "确认",
+                            key=f"confirm_mem_yes_{memory_id}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            try:
+                                api(
+                                    "DELETE",
+                                    f"/memories/{memory_id}",
+                                    params={"user_id": USER_ID},
+                                    timeout=10,
+                                )
+                                st.session_state.memories = [
+                                    item
+                                    for item in st.session_state.memories
+                                    if item.get("id") != memory_id
+                                ]
+                                st.session_state.memory_count = len(
+                                    st.session_state.memories
+                                )
+                                st.session_state[confirm_key] = False
+                                st.rerun()
+                            except Exception as exc:
+                                st.session_state[confirm_key] = False
+                                st.error(f"删除失败：{exc}")
+                    with no_col:
+                        if st.button(
+                            "取消",
+                            key=f"confirm_mem_no_{memory_id}",
+                            use_container_width=True,
+                        ):
+                            st.session_state[confirm_key] = False
                             st.rerun()
-                        except Exception as exc:
-                            st.error(f"删除失败：{exc}")
 
         st.markdown(
             "<div class='mem-foot'>记忆是用户级数据，不随会话删除。</div>",
@@ -1091,6 +1280,7 @@ def render_memory_panel() -> None:
 
 # ---------------------------------------------------------------- sidebar
 def render_sidebar() -> None:
+    streaming = bool(st.session_state.get("active_stream"))
     with st.sidebar:
         st.markdown(
             "<div class='brand-row'>"
@@ -1101,7 +1291,13 @@ def render_sidebar() -> None:
             unsafe_allow_html=True,
         )
 
-        if st.button("＋ 新对话", type="primary", use_container_width=True, key="new_chat"):
+        if st.button(
+            "＋ 新对话",
+            type="primary",
+            use_container_width=True,
+            key="new_chat",
+            disabled=streaming,
+        ):
             new_conversation()
 
         search = st.text_input(
@@ -1135,14 +1331,42 @@ def render_sidebar() -> None:
                 use_container_width=True,
                 type="primary" if active else "secondary",
                 help=full_title if len(full_title) > 13 else None,
+                disabled=streaming,
             ):
                 select_conversation(conversation)
 
         if shown == 0:
             st.caption("没有匹配的会话")
 
-        if st.button("🗑 删除当前对话", key="delete_chat", use_container_width=True):
-            delete_current_conversation()
+        if st.button(
+            "🗑 删除当前对话",
+            key="delete_chat",
+            use_container_width=True,
+            disabled=streaming,
+        ):
+            st.session_state.confirm_delete_chat = True
+            st.rerun()
+
+        if st.session_state.get("confirm_delete_chat"):
+            st.warning("确认删除当前对话？此操作不可撤销。")
+            confirm_col, cancel_col = st.columns(2)
+            with confirm_col:
+                if st.button(
+                    "确认删除",
+                    key="delete_chat_confirm",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state.confirm_delete_chat = False
+                    delete_current_conversation()
+            with cancel_col:
+                if st.button(
+                    "取消",
+                    key="delete_chat_cancel",
+                    use_container_width=True,
+                ):
+                    st.session_state.confirm_delete_chat = False
+                    st.rerun()
 
         st.markdown("<div class='side-label'>知识库</div>", unsafe_allow_html=True)
         kbs = st.session_state.kbs
@@ -1160,6 +1384,7 @@ def render_sidebar() -> None:
                 kbs,
                 key="kb_widget",
                 label_visibility="collapsed",
+                disabled=streaming,
             )
             st.session_state.selected_kb = selected_kb
             if selected_kb != previous_kb:
@@ -1179,7 +1404,12 @@ def render_sidebar() -> None:
                 label_visibility="collapsed",
                 key="new_kb_name",
             )
-            if st.button("创建知识库", key="create_kb", use_container_width=True):
+            if st.button(
+                "创建知识库",
+                key="create_kb",
+                use_container_width=True,
+                disabled=streaming,
+            ):
                 if new_kb.strip():
                     try:
                         api(
@@ -1246,7 +1476,10 @@ def render_sidebar() -> None:
                     label_visibility="collapsed",
                 )
                 if uploaded is not None and st.button(
-                    "上传", key=f"upload_btn_{selected_kb}", use_container_width=True
+                    "上传",
+                    key=f"upload_btn_{selected_kb}",
+                    use_container_width=True,
+                    disabled=streaming,
                 ):
                     with st.spinner("上传并处理中…"):
                         try:
@@ -1278,7 +1511,7 @@ def render_sidebar() -> None:
                 if st.button(
                     "删除知识库",
                     key="delete_kb",
-                    disabled=not confirm,
+                    disabled=not confirm or streaming,
                     use_container_width=True,
                 ):
                     try:
@@ -1345,10 +1578,10 @@ with chat_col:
     with st.container(
         height=CHAT_HEIGHT, border=False, key="chat_scroll", autoscroll=True
     ):
-        if not st.session_state.messages and not st.session_state.pending_query:
+        if not st.session_state.messages and not st.session_state.active_stream:
             render_welcome()
         else:
-            for message in st.session_state.messages:
+            for index, message in enumerate(st.session_state.messages):
                 st.markdown(
                     render_message(
                         message["role"],
@@ -1358,13 +1591,17 @@ with chat_col:
                         sources_from_previous_turn=message.get(
                             "sources_from_previous_turn", False
                         ),
+                        anchor_key=f"m{index}",
                     ),
                     unsafe_allow_html=True,
                 )
-            if st.session_state.pending_query:
-                query = st.session_state.pending_query
-                st.session_state.pending_query = None
-                stream_response(query)
+                render_message_actions(
+                    message,
+                    index,
+                    index == len(st.session_state.messages) - 1,
+                )
+            if st.session_state.get("active_stream"):
+                render_live_stream()
     render_composer()
 
 if memory_col is not None:

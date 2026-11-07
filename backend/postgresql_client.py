@@ -388,6 +388,29 @@ class PostgreSQLParentClient:
 
         return [dict(row) for row in rows]
 
+    async def delete_last_turn(
+        self, conversation_id: str, user_id: int
+    ) -> int:
+        """删除会话最后一轮问答，供前端“重新生成”使用。"""
+        if not self.pool:
+            return 0
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                DELETE FROM raw_conversations
+                WHERE id IN (
+                    SELECT id FROM raw_conversations
+                    WHERE conversation_id = $1 AND user_id = $2
+                    ORDER BY created_at DESC
+                    LIMIT 2
+                )
+                RETURNING id
+                """,
+                conversation_id,
+                user_id,
+            )
+        return len(rows)
+
     async def rename_conversation(
         self, conversation_id: str, user_id: int, title: str
     ) -> Optional[Dict[str, any]]:
