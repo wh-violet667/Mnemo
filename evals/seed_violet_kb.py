@@ -4,7 +4,7 @@
 是评测标签，按语料 README 要求绝不入库（避免评测泄漏）。
 
 用法：
-    python evals/seed_violet_kb.py --base-url http://127.0.0.1:8011
+    python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010
 """
 
 from __future__ import annotations
@@ -23,14 +23,22 @@ TERMINAL_STATES = {"completed", "success", "failed", "error", "ready"}
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="上传 violet-evergarden 语料到知识库")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8011")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8010")
     parser.add_argument("--user-id", type=int, default=1)
     parser.add_argument("--kb-id", default="violet-kb")
     args = parser.parse_args()
 
-    docx_files = sorted(CORPUS_DIR.glob("*.docx"))
+    # README.docx 是语料说明，不是评测文档；避免它进入知识库成为噪声。
+    docx_files = sorted(
+        path
+        for path in CORPUS_DIR.glob("*.docx")
+        if path.name.lower() != "readme.docx"
+    )
     if not docx_files:
         raise SystemExit(f"{CORPUS_DIR} 为空，找不到 docx 语料")
+    if len(docx_files) != 12:
+        names = ", ".join(path.name for path in docx_files)
+        raise SystemExit(f"预期 12 份评测文档，实际 {len(docx_files)} 份：{names}")
 
     base = args.base_url.rstrip("/")
     response = requests.post(

@@ -5,6 +5,8 @@
 - 前置：Phase 0 审计完成、Phase 0.5 数据一致性修复完成（`42fa209`）
 - 范围：只做 Agentic-lite，不包含 KG、多 Agent、Web 搜索、完整 GraphRAG
 
+> 2026-11 清理：评测已统一到 `evals/golden_violet.jsonl`（50 条）。`golden_agentic.jsonl`、`eval-kb` 与对应合成语料已移除。
+
 ---
 
 ## 1. 目标与非目标
@@ -593,7 +595,7 @@ AGENTIC_MAX_QUERIES=3
 | `backend/schemas.py` | 修改 | `ContextSchema.retrieval_mode` |
 | `frontend/streaming.py` | 修改 | 模式参数、trace 事件 |
 | `frontend/app.py` | 修改 | 三档选择、执行摘要 |
-| `evals/golden_agentic.jsonl` | 新增 | 多跳/关系/时间/不可回答集 |
+| `evals/golden_violet.jsonl` | 沿用 | 50 条统一评测集；原 agentic 33 已移除 |
 | `evals/run_eval.py` | 修改 | retrieval_mode、parent_id 标签 |
 | `evals/run_agent_eval.py` | 新增（可选） | 端到端答案评测 |
 | `tests/test_routing.py` | 新增 | 纯函数测试 |
@@ -645,24 +647,19 @@ AGENTIC_MAX_QUERIES=3
 
 ### 10.1 数据集
 
-新增 `evals/golden_agentic.jsonl`：
-
-- 10 条跨文档多跳；
-- 8 条关系/适用域；
-- 6 条时间/版本；
-- 4 条不可回答；
-- 5 条单跳回归。
+评测统一使用 `evals/golden_violet.jsonl`（50 条，覆盖单跳、多跳、数值、版本冲突、别名和不可回答）。原计划新增的 `golden_agentic.jsonl` 已移除。
 
 每条格式：
 
 ```json
 {
-  "id": "a001",
+  "id": "v-q001",
   "query": "...",
-  "query_type": "multi_hop|relational|temporal|unanswerable|single_hop",
+  "query_type": "single_hop|multi_hop|numeric|version_conflict|alias|unanswerable",
+  "expected_files": ["01-overview.docx"],
   "expected_parent_ids": ["..."],
   "required_facts": ["..."],
-  "expected_path": ["PolicyA", "SUPERSEDES", "PolicyB"]
+  "reference_answer": "..."
 }
 ```
 
@@ -778,7 +775,7 @@ AGENTIC_MAX_QUERIES=3
 8. agent.py trace
 9. frontend/streaming.py
 10. frontend/app.py
-11. golden_agentic.jsonl
+11. golden_violet.jsonl
 12. run_eval.py
 13. README / .env.example
 14. 评审与门禁

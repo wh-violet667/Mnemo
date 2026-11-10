@@ -59,8 +59,5 @@ evals/results/
 # 内部笔记/审查材料，不发布
 _internal/
 
-# 评测语料（由脚本生成）
-evals/corpus/
-
 # pytest cache
 .pytest_cache/

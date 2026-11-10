@@ -6,9 +6,10 @@
 
 用法：
     python evals/run_eval.py --check-only
-    python evals/run_eval.py --kb-id kb-1 --user-id 1
-    python evals/run_eval.py --mode dense
-    python evals/run_eval.py --mode hybrid+rerank --k 5 --limit 20
+    python evals/run_eval.py --retrieval-mode fast
+    python evals/run_eval.py --retrieval-mode deep
+    python evals/run_eval.py --retrieval-mode auto
+    python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from backend.citations import order_by_rerank  # noqa: E402
 def load_golden(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         raise SystemExit(
-            f"找不到 {path}。先复制 evals/golden.example.jsonl 为 evals/golden.jsonl，再按你的知识库改。"
+            f"找不到 {path}。请检查 evals/golden_violet.jsonl 是否存在。"
         )
 
     rows: List[Dict[str, Any]] = []
@@ -268,9 +269,13 @@ async def evaluate(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mnemo 检索评测")
     parser.add_argument(
-        "--golden", default=str(ROOT / "evals" / "golden.jsonl"), help="评测集路径"
+        "--golden",
+        default=str(ROOT / "evals" / "golden_violet.jsonl"),
+        help="评测集路径，默认 evals/golden_violet.jsonl",
     )
-    parser.add_argument("--kb-id", default="默认知识库", help="默认知识库 ID")
+    parser.add_argument(
+        "--kb-id", default="violet-kb", help="默认知识库 ID（violet 评测集）"
+    )
     parser.add_argument("--user-id", type=int, default=1, help="默认用户 ID")
     parser.add_argument("--k", type=int, default=5, help="Recall@k 的 k")
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 条")

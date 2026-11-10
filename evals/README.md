@@ -1,78 +1,70 @@
-# 检索评测
+# 检索评测（violet 50）
 
 目的：用固定问题集证明检索策略有效，而不是只写“我用了混合检索”。
 
-评测集：10 份 PDF（5 份现行制度 + 5 份过时/区域/承包商版本干扰文档）× 30 条问题，包含单跳事实和版本区分问题。
+评测集只有一套：`evals/golden_violet.jsonl`，共 50 条问题，对应 `violet-kb`。
+题型分布：31 条单跳、7 条多跳、4 条数值、4 条不可回答、2 条版本冲突、2 条别名。
+每条同时带有 `expected_files`、`required_facts` 和 `reference_answer`，检索评测先用 `expected_files`，后续答案评测可直接用参考答案。
 
-## 1. 生成语料
+## 1. 评测语料
 
-```bash
-python evals/build_corpus.py
+语料来自外部目录：
+
+```text
+rag data/violet-evergarden-kb/docx
 ```
 
-会在 `evals/corpus/` 生成 10 份 PDF（5 份现行制度 + 5 份过时/区域/承包商版本干扰文档）。语料由脚本生成，保证任何人都能复现。
+共 12 份 DOCX 参与评测；`README.docx` 是语料说明，不上传，避免成为检索噪声。
+`evals/golden_violet.jsonl` 由 `evals/build_violet_golden.py` 从该语料自带的 `qa-benchmark.zh.jsonl` 转换而来。
 
 ## 2. 上传到知识库
 
 先启动后端，然后：
 
 ```bash
-python evals/seed_eval_kb.py --base-url http://127.0.0.1:8010
+python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010
 ```
 
-默认知识库 ID 是 `eval-kb`，上传后会等待 10 份文件全部入库。
+默认知识库 ID 是 `violet-kb`，上传后会等待 12 份文件全部入库。
+如果已经有可用的 `violet-kb`，可以跳过这一步。
 
 ## 3. 跑评测
 
 ```bash
-# 只校验格式
+# 只校验评测集格式
 python evals/run_eval.py --check-only
 
-# 稠密 / 混合 / 混合+重排
-python evals/run_eval.py --kb-id eval-kb --mode dense
-python evals/run_eval.py --kb-id eval-kb --mode hybrid
-python evals/run_eval.py --kb-id eval-kb --mode hybrid+rerank
+# 默认走 violet-kb + golden_violet.jsonl
+python evals/run_eval.py --retrieval-mode fast
+python evals/run_eval.py --retrieval-mode deep
+python evals/run_eval.py --retrieval-mode auto
+
+# baseline：旧链路 hybrid + rerank
+python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 ```
 
-输出 Recall@5、MRR、P50/P95 延迟，以及未命中的样本。
+输出 Recall@5、MRR、P50/P95 延迟、分题型指标和未命中样本。
 
-## 4. 实测结果（30 条问题，k=5）
+## 4. 实测结果（50 条问题，k=5）
 
-| 检索策略 | Recall@5 | MRR | P95 延迟 |
-|---|---|---|---|
-| 仅稠密向量 | 1.000 | 0.867 | 1212 ms |
-| 稠密 + BM25 + RRF | 1.000 | 0.867 | 1292 ms |
-| 再加 qwen3-rerank | 1.000 | 0.933 | 2525 ms |
+| 模式 | Recall@5 | MRR | P50 | P95 |
+|---|---:|---:|---:|---:|
+| baseline（hybrid+rerank） | 1.000 | 0.832 | 2208 ms | 2457 ms |
+| fast | 1.000 | 0.849 | 2261 ms | 2620 ms |
+| deep | 1.000 | 0.845 | 7783 ms | 12193 ms |
+| auto | 1.000 | 0.849 | 2302 ms | 8371 ms |
 
-剩余错误集中在「现行 vs 过时版本」的区分题：两类文档都包含查询里的数字，rerank 无法稳定判断哪份是现行版本。下一步应给文档加 `status=current/archived` 元数据，在检索前过滤，而不是继续调 rerank。
+结论：
 
-## 5. Agentic-lite 评测（33 条）
+- 这套语料上 Recall@5 已经饱和，差异主要体现在 MRR；
+- `fast` 的 MRR 略高于 baseline，但 deep / auto 没有继续提升；
+- deep 的 P95 约 12 秒，auto 约 8 秒，约为 fast 的 4–5 倍；
+- 当前默认检索模式是 `fast`；需要多轮反思时再显式选择 `auto` / `deep`。
 
-`golden_agentic.jsonl` 覆盖 10 条多跳、8 条关系、6 条时间/版本、4 条不可回答、5 条单跳回归：
+## 5. 已知边界
 
-```bash
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --mode hybrid+rerank
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode fast
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode deep
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode auto
-```
-
-本地实测（2026-11，k=5）：
-
-| 模式 | Recall@5 | MRR | P95 |
-|---|---:|---:|---:|
-| baseline | 1.000 | 0.948 | 3134 ms |
-| fast | 1.000 | 0.948 | 2235 ms |
-| deep | 1.000 | 0.948 | 11110 ms |
-| auto | 1.000 | 0.948 | 7564 ms |
-
-结论：当前语料上 Recall 已饱和，deep / auto 没有质量增益，只增加延迟。该结果不满足“多跳 Recall +10pp”的门槛，需要更难的多跳集或更强的 critic。
-
-`golden_violet.jsonl`（50 条真实语料，需外部 `rag data/violet-evergarden-kb`）是补充对照，不在默认复现路径；它的标签是文档级，命中文件任意父块即判对，MRR/Recall 偏乐观。
-
-## 6. 已知边界
-
-- 只测检索层，不测最终回答是否忠实；答案质量建议加 LLM judge 或人工抽检 20 条。
-- 评测语料是合成/小规模数据，真实业务文档需要重新标 golden set。
-- Agentic-lite 当前没有证明质量增益；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
-- 修改分块参数需要重建索引，分块消融请另开 collection 或用独立脚本。
+- **标签是文档级**：命中 `expected_files` 中任意一个文件的任意父块即判对，MRR/Recall 偏乐观。父块级标签需要后续补 `expected_parent_ids`。
+- **只测检索层**：不测最终回答是否忠实；答案正确性、忠实度和引用支持率需要 LLM judge 或人工抽检。
+- **4 条不可回答样本**目前只统计“是否零召回”，不能替代最终拒答评测。
+- **violet 语料在仓库外**：没有 `rag data/violet-evergarden-kb` 时无法重新入库；仓库内保留的是转换后的 `golden_violet.jsonl` 和实测结果。
+- **分块消融另开实验**：修改 chunk size / overlap 需要重建索引，不能直接复用当前 `violet-kb` 的向量。

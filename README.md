@@ -15,7 +15,7 @@
 
 ![Mnemo 对话与记忆抽屉](assets/demo.png)
 
-*演示数据：`eval-kb` 中的 10 份合成 PDF；记忆抽屉展示演示环境中的 17 条长期记忆（种子 + 自动抽取）。*
+*演示数据：`violet-kb` 中的 12 份 DOCX；记忆抽屉展示演示环境中的 17 条长期记忆（种子 + 自动抽取）。*
 
 ## 这个项目解决什么
 
@@ -33,42 +33,20 @@ Mnemo 围绕这两点做了四件事：
 
 ## 可验证的结果
 
-30 条问题的检索评测（10 份合成 PDF，含现行/过时版本干扰文档）：
+50 条 violet 语料问题的检索评测（`violet-kb`，12 份 DOCX，k=5）：
 
-| 检索策略 | Recall@5 | MRR | P95 延迟 |
-|---|---|---|---|
-| 仅稠密向量 | 1.000 | 0.867 | 1212 ms |
-| 稠密 + BM25 + RRF | 1.000 | 0.867 | 1292 ms |
-| 再加 `qwen3-rerank` | 1.000 | **0.933** | 2525 ms |
+| 模式 | Recall@5 | MRR | P50 | P95 |
+|---|---:|---:|---:|---:|
+| baseline（hybrid+rerank） | 1.000 | 0.832 | 2208 ms | 2457 ms |
+| fast | 1.000 | 0.849 | 2261 ms | 2620 ms |
+| deep | 1.000 | 0.845 | 7783 ms | 12193 ms |
+| auto | 1.000 | 0.849 | 2302 ms | 8371 ms |
 
-- 召回在这套语料上已经饱和，rerank 的收益主要在 **MRR**：把正确文档排到第 1。
-- 代价是约 1 秒延迟；因此 rerank 是可选策略，不是无脑默认。
-- 剩余错误集中在「现行 vs 过时版本」：两类文档都包含查询里的数字，rerank 无法稳定判断。下一步应使用 `status=current/archived` 元数据过滤，而不是继续调 rerank。
-
-### Agentic-lite 本地实测
-
-在 33 条 `golden_agentic` 和 50 条 `golden_violet` 上做过 A/B（本地结果文件在 `evals/results/`，该目录不提交）：
-
-| 数据集 | 模式 | Recall@5 | MRR | P50 | P95 |
-|---|---|---:|---:|---:|---:|
-| agentic 33 | baseline（hybrid+rerank） | 1.000 | 0.948 | 2009 ms | 3134 ms |
-| agentic 33 | fast | 1.000 | 0.948 | 2008 ms | 2235 ms |
-| agentic 33 | deep | 1.000 | 0.948 | 6281 ms | 11110 ms |
-| agentic 33 | auto | 1.000 | 0.948 | 2005 ms | 7564 ms |
-| violet 50 | baseline | 1.000 | 0.832 | 2208 ms | 2457 ms |
-| violet 50 | fast | 1.000 | 0.849 | 2261 ms | 2620 ms |
-| violet 50 | deep | 1.000 | 0.845 | 7783 ms | 12193 ms |
-| violet 50 | auto | 1.000 | 0.849 | 2302 ms | 8371 ms |
-
-结论：
-
-> 这组延迟来自同一次本地 A/B，和上面 30 条基础集的运行批次不同，数字不要直接横向比较。violet 的标签是文档级（命中该文件任意父块即判对），指标偏乐观。
-
-- 两套语料的 Recall@5 已经饱和，**deep / auto 没有带来 Recall 或 MRR 提升**；
-- deep 的 P95 约 11-12 秒，auto 约 7.6-8.4 秒，约是 fast 的 3-5 倍；
-- violet 上 fast 的 MRR（0.849）略高于 baseline（0.832），但 deep / auto 未继续提升；
-- 因此当前 Agentic-lite 的价值是**可控的多轮轨迹和可观测性**，不是已经被数据证明的质量提升。阶段 1 计划的“多跳 Recall +10pp”门槛在当前评测集上**没有达成**；
-- 当前默认模式已改为 `fast`；需要多轮反思时显式选择 `auto` 或 `deep`，并按场景评估延迟与收益。
+- Recall@5 在这套语料上已经饱和，差异主要体现在 **MRR**。
+- `fast` 的 MRR 略高于 baseline，但 **deep / auto 没有继续提升**；deep 的 P95 约 12 秒，auto 约 8 秒，约为 fast 的 4–5 倍。
+- 因此当前 Agentic-lite 的价值是**可控的多轮轨迹和可观测性**，不是已经被数据证明的质量提升。
+- 当前默认模式是 `fast`；需要多轮反思时显式选择 `auto` 或 `deep`。
+- violet 的标签是文档级（命中该文件任意父块即判对），MRR/Recall 偏乐观；答案级评测仍需补 LLM judge。
 
 复现方式见 [检索评测](#检索评测)。
 
@@ -366,41 +344,25 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 
 ## 检索评测
 
-评测语料是 10 份 PDF：5 份现行制度 + 5 份过时/区域/承包商版本作为干扰；共 30 条问题，包含版本区分题。
+评测统一使用 `evals/golden_violet.jsonl`：50 条问题，对应 `violet-kb`（12 份 DOCX，来自外部 `rag data/violet-evergarden-kb/docx`）。题型包括 31 条单跳、7 条多跳、4 条数值、4 条不可回答、2 条版本冲突、2 条别名。
 
 ```bash
 # 0. 只校验评测集格式
 python evals/run_eval.py --check-only
 
-# 1. 生成语料
-python evals/build_corpus.py
+# 1. 上传 violet 语料（需要外部语料目录）
+python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010
 
-# 2. 上传到正在运行的后端
-python evals/seed_eval_kb.py --base-url http://127.0.0.1:8010
-
-# 3. 三种检索策略
-python evals/run_eval.py --kb-id eval-kb --mode dense
-python evals/run_eval.py --kb-id eval-kb --mode hybrid
-python evals/run_eval.py --kb-id eval-kb --mode hybrid+rerank
+# 2. 检索模式 A/B
+python evals/run_eval.py --retrieval-mode fast
+python evals/run_eval.py --retrieval-mode deep
+python evals/run_eval.py --retrieval-mode auto
+python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 ```
 
-输出 Recall@5、MRR、P50/P95，以及未命中样本。详细说明见 [`evals/README.md`](evals/README.md)。
+输出 Recall@5、MRR、P50/P95、分题型指标和未命中样本。详细说明见 [`evals/README.md`](evals/README.md)。
 
-Agentic-lite 评测集（`evals/golden_agentic.jsonl`，33 条：10 多跳 + 8 关系 + 6 时间 + 4 不可回答 + 5 单跳回归，按 `expected_parent_ids` 判定）：
-
-```bash
-# A/B 对比（baseline 为现产 hybrid+rerank 链路）
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --mode hybrid+rerank
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode fast
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode deep
-python evals/run_eval.py --golden evals/golden_agentic.jsonl --retrieval-mode auto
-```
-
-额外输出分类型 Recall/MRR、平均检索轮次、auto 升级率与规则误判率、不可回答样本的噪声控制。
-
-`evals/golden_violet.jsonl` 是 50 条真实语料评测（TV 动画知识库），需要外部 `rag data/violet-evergarden-kb`；它不在默认复现路径里，适合做补充对照。
-
-> 这些仍是合成/小规模评测集，用于验证流水线和做消融，不代表真实业务效果。真实项目需要用业务文档重新标注 golden set，并补答案级 judge。
+> violet 的标签是文档级：命中 `expected_files` 中任意文件的任意父块即判对，指标偏乐观。答案正确性、忠实度和引用支持率还需要单独的 LLM judge。
 
 ## 测试
 
@@ -453,11 +415,9 @@ Mnemo/
 ├── docs/
 │   └── phase1-agentic-lite.md   # Agentic-lite 设计与实现文档
 ├── evals/
-│   ├── build_corpus.py          # 生成基础评测 PDF
-│   ├── seed_eval_kb.py          # 上传基础评测语料
-│   ├── golden.jsonl             # 30 条基础检索评测
-│   ├── golden_agentic.jsonl     # 33 条多跳/关系/时间/不可回答
-│   ├── golden_violet.jsonl      # 50 条真实语料评测（需外部语料）
+│   ├── build_violet_golden.py   # 转换外部 violet benchmark
+│   ├── seed_violet_kb.py        # 上传 12 份 DOCX 到 violet-kb
+│   ├── golden_violet.jsonl      # 50 条评测问题
 │   ├── run_eval.py              # baseline/fast/deep/auto 评测
 │   └── README.md
 ├── tests/                       # pytest（60 个测试）
@@ -473,12 +433,12 @@ Mnemo/
 ## 已知限制
 
 - **单用户演示**：`MNEMO_USER_ID` 默认 1，没有登录和租户隔离，不能直接公开部署。
-- **评测集仍偏合成**：30 条基础集 + 33 条 Agentic 集规模有限；`golden_violet` 的 50 条真实语料需要外部 `rag data/violet-evergarden-kb`，默认复现路径不包含它。
-- **Agentic 未显示质量增益**：在现有两套评测集上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 3-5 倍；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
+- **评测集依赖外部语料**：50 条问题对应 12 份 DOCX，语料在 `rag data/violet-evergarden-kb`，仓库内只保留转换后的 golden 和实测结果；标签是文档级，MRR/Recall 偏乐观。
+- **Agentic 未显示质量增益**：在 violet 50 条上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 4-5 倍；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
 - **路由仍有误判**：`auto` 在 violet 50 条中有 2 条单跳问题被路由到 deep；需要更多路由测试集再调规则。
 - **没有 CI**：目前依靠本地 pytest 和手动评测，没有 GitHub Actions 门禁。
 - **前端仍以单文件为主**：请求流已拆到 `frontend/streaming.py`，但 `frontend/app.py` 仍承担约 1660 行 UI/CSS/状态，后续应继续拆分组件与状态。
-- **rerank 有延迟成本**：`qwen3-rerank` 带来约 1 秒 P95 增加，适合对排序质量敏感的场景。
+- **rerank 有延迟成本**：`qwen3-rerank` 会增加一次远程重排调用，适合对排序质量敏感的场景。
 - **依赖外部服务**：DashScope 和 Zilliz 都是云服务，离线环境需要替换为本地模型/本地 Milvus。
 - **索引是最终一致**：PostgreSQL 事务提交后若 Milvus 投影失败，需要运行 `reindex_memories.py`；尚未实现自动 outbox worker。
 - **冲突策略仍是阈值式**：≥0.9 会把旧记忆标记为 superseded，尚未接入 LLM 判断 ADD / UPDATE / NOOP；相似但不同的事实可能被误替换。
@@ -498,7 +458,7 @@ Mnemo/
 - [ ] 文档 `status=current/archived` 元数据过滤，解决版本区分
 - [ ] GitHub Actions：ruff + pytest + eval 格式检查
 - [ ] 应用 Dockerfile / compose 一键启动
-- [ ] 真实文档评测集 + 答案忠实度（LLM judge）
+- [ ] 分块策略消融（chunk size / overlap）+ 答案正确性/忠实度（LLM judge）
 - [ ] 拆分 `frontend/app.py`
 
 
