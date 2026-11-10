@@ -13,19 +13,30 @@
 
 用法：
     python evals/build_violet_golden.py
+    python evals/build_violet_golden.py --kb-dir data/violet-evergarden-kb
+
+语料默认放在 `data/violet-evergarden-kb/`（不提交到 Git），也可通过
+`VIOLET_KB_DIR`、`--kb-dir` 或 `--benchmark` 指定。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BENCHMARK = (
-    ROOT.parent / "rag data" / "violet-evergarden-kb" / "data" / "qa-benchmark.zh.jsonl"
-)
+DEFAULT_KB_DIR = ROOT / "data" / "violet-evergarden-kb"
 OUTPUT = ROOT / "evals" / "golden_violet.jsonl"
+
+
+def resolve_kb_dir(value: str | None) -> Path:
+    """解析语料根目录；相对路径按项目根目录处理。"""
+    if not value:
+        return DEFAULT_KB_DIR
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else (ROOT / path)
 
 
 def convert_row(row: dict, kb_id: str, user_id: int) -> dict:
@@ -55,21 +66,42 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="转换 violet benchmark 为 golden 格式")
     parser.add_argument("--kb-id", default="violet-kb")
     parser.add_argument("--user-id", type=int, default=1)
+    parser.add_argument(
+        "--kb-dir",
+        default=None,
+        help="语料根目录，默认 data/violet-evergarden-kb 或 VIOLET_KB_DIR",
+    )
+    parser.add_argument(
+        "--benchmark",
+        default=None,
+        help="qa-benchmark.zh.jsonl 路径；默认 <kb-dir>/data/qa-benchmark.zh.jsonl",
+    )
     parser.add_argument("--output", default=str(OUTPUT))
     args = parser.parse_args()
 
-    if not BENCHMARK.exists():
-        raise SystemExit(f"找不到 {BENCHMARK}")
+    kb_dir = resolve_kb_dir(args.kb_dir or os.getenv("VIOLET_KB_DIR"))
+    benchmark = (
+        Path(args.benchmark).expanduser()
+        if args.benchmark
+        else kb_dir / "data" / "qa-benchmark.zh.jsonl"
+    )
+    if not benchmark.is_absolute():
+        benchmark = ROOT / benchmark
+    if not benchmark.exists():
+        raise SystemExit(
+            f"找不到 {benchmark}。请把 violet-evergarden-kb 放到 "
+            "data/violet-evergarden-kb/，或用 --kb-dir / --benchmark 指定。"
+        )
 
     rows = []
-    with BENCHMARK.open("r", encoding="utf-8") as handle:
+    with benchmark.open("r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
             line = line.strip()
             if not line:
                 continue
             row = json.loads(line)
             if not row.get("question"):
-                raise SystemExit(f"{BENCHMARK}:{line_no} 缺少 question 字段")
+                raise SystemExit(f"{benchmark}:{line_no} 缺少 question 字段")
             rows.append(convert_row(row, args.kb_id, args.user_id))
 
     output_path = Path(args.output)

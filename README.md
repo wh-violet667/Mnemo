@@ -344,14 +344,18 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 
 ## 检索评测
 
-评测统一使用 `evals/golden_violet.jsonl`：50 条问题，对应 `violet-kb`（12 份 DOCX，来自外部 `rag data/violet-evergarden-kb/docx`）。题型包括 31 条单跳、7 条多跳、4 条数值、4 条不可回答、2 条版本冲突、2 条别名。
+评测统一使用 `evals/golden_violet.jsonl`：50 条问题，对应 `violet-kb`（12 份 DOCX，默认放在本地 `data/violet-evergarden-kb/`，不提交到 Git）。题型包括 31 条单跳、7 条多跳、4 条数值、4 条不可回答、2 条版本冲突、2 条别名。
 
 ```bash
 # 0. 只校验评测集格式
 python evals/run_eval.py --check-only
 
-# 1. 上传 violet 语料（需要外部语料目录）
+# 1. 检查并上传本地语料（默认 data/violet-evergarden-kb）
+python evals/seed_violet_kb.py --check-only
 python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010
+
+# 也可以用 --corpus-dir 或 VIOLET_KB_DIR 指定其他位置
+python evals/seed_violet_kb.py --corpus-dir data/violet-evergarden-kb
 
 # 2. 检索模式 A/B
 python evals/run_eval.py --retrieval-mode fast
@@ -360,7 +364,7 @@ python evals/run_eval.py --retrieval-mode auto
 python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 ```
 
-输出 Recall@5、MRR、P50/P95、分题型指标和未命中样本。详细说明见 [`evals/README.md`](evals/README.md)。
+输出 Recall@5、MRR、P50/P95、分题型指标和未命中样本。完整语料不提交到公开仓库，放置说明见 [`data/README.md`](data/README.md)，评测细节见 [`evals/README.md`](evals/README.md)。
 
 > violet 的标签是文档级：命中 `expected_files` 中任意文件的任意父块即判对，指标偏乐观。答案正确性、忠实度和引用支持率还需要单独的 LLM judge。
 
@@ -414,8 +418,11 @@ Mnemo/
 ├── assets/                      # README 截图
 ├── docs/
 │   └── phase1-agentic-lite.md   # Agentic-lite 设计与实现文档
+├── data/
+│   ├── README.md                # 本地语料说明
+│   └── violet-evergarden-kb/    # 本地语料，.gitignore 忽略
 ├── evals/
-│   ├── build_violet_golden.py   # 转换外部 violet benchmark
+│   ├── build_violet_golden.py   # 转换 violet benchmark
 │   ├── seed_violet_kb.py        # 上传 12 份 DOCX 到 violet-kb
 │   ├── golden_violet.jsonl      # 50 条评测问题
 │   ├── run_eval.py              # baseline/fast/deep/auto 评测
@@ -433,7 +440,7 @@ Mnemo/
 ## 已知限制
 
 - **单用户演示**：`MNEMO_USER_ID` 默认 1，没有登录和租户隔离，不能直接公开部署。
-- **评测集依赖外部语料**：50 条问题对应 12 份 DOCX，语料在 `rag data/violet-evergarden-kb`，仓库内只保留转换后的 golden 和实测结果；标签是文档级，MRR/Recall 偏乐观。
+- **评测集依赖本地语料**：50 条问题对应 12 份 DOCX，默认放在 `data/violet-evergarden-kb/`（不提交），可用 `--corpus-dir` / `VIOLET_KB_DIR` 指定；标签是文档级，MRR/Recall 偏乐观。
 - **Agentic 未显示质量增益**：在 violet 50 条上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 4-5 倍；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
 - **路由仍有误判**：`auto` 在 violet 50 条中有 2 条单跳问题被路由到 deep；需要更多路由测试集再调规则。
 - **没有 CI**：目前依靠本地 pytest 和手动评测，没有 GitHub Actions 门禁。

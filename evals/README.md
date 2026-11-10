@@ -8,14 +8,14 @@
 
 ## 1. 评测语料
 
-语料来自外部目录：
+语料默认放在项目本地目录：
 
 ```text
-rag data/violet-evergarden-kb/docx
+data/violet-evergarden-kb/
 ```
 
-共 12 份 DOCX 参与评测；`README.docx` 是语料说明，不上传，避免成为检索噪声。
-`evals/golden_violet.jsonl` 由 `evals/build_violet_golden.py` 从该语料自带的 `qa-benchmark.zh.jsonl` 转换而来。
+该目录被 `.gitignore` 忽略，不提交到公开仓库。共 12 份 DOCX 参与评测；`README.docx` 是语料说明，不上传，避免成为检索噪声。
+`evals/golden_violet.jsonl` 由 `evals/build_violet_golden.py` 从 `data/violet-evergarden-kb/data/qa-benchmark.zh.jsonl` 转换而来。
 
 ## 2. 上传到知识库
 
@@ -27,6 +27,14 @@ python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010
 
 默认知识库 ID 是 `violet-kb`，上传后会等待 12 份文件全部入库。
 如果已经有可用的 `violet-kb`，可以跳过这一步。
+
+语料不在默认位置时：
+
+```bash
+python evals/seed_violet_kb.py --corpus-dir /path/to/violet-evergarden-kb
+# 或
+VIOLET_KB_DIR=/path/to/violet-evergarden-kb python evals/seed_violet_kb.py
+```
 
 ## 3. 跑评测
 
@@ -66,5 +74,5 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 - **标签是文档级**：命中 `expected_files` 中任意一个文件的任意父块即判对，MRR/Recall 偏乐观。父块级标签需要后续补 `expected_parent_ids`。
 - **只测检索层**：不测最终回答是否忠实；答案正确性、忠实度和引用支持率需要 LLM judge 或人工抽检。
 - **4 条不可回答样本**目前只统计“是否零召回”，不能替代最终拒答评测。
-- **violet 语料在仓库外**：没有 `rag data/violet-evergarden-kb` 时无法重新入库；仓库内保留的是转换后的 `golden_violet.jsonl` 和实测结果。
+- **violet 语料不提交**：默认在 `data/violet-evergarden-kb/`，公开仓库没有完整语料；课程提交包可以自带，或用 `--corpus-dir` / `VIOLET_KB_DIR` 指定。
 - **分块消融另开实验**：修改 chunk size / overlap 需要重建索引，不能直接复用当前 `violet-kb` 的向量。

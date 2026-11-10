@@ -22,16 +22,15 @@ backend/提示词
 
 
 
-# 确保 backend、frontend、data 目录被跟踪（不忽略）
+# 确保 backend、frontend 目录被跟踪（不忽略）
 !backend/
 !frontend/
-!data/
 
 # 确保 README.md 被跟踪
 !README.md
 
-#忽略data文件夹
-data
+# 本地评测语料：不提交；只保留 data/README.md
+data/violet-evergarden-kb/
 
 #忽略.clade文件夹
 .clade
