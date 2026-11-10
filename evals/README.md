@@ -72,7 +72,51 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 ## 5. 已知边界
 
 - **标签是文档级**：命中 `expected_files` 中任意一个文件的任意父块即判对，MRR/Recall 偏乐观。父块级标签需要后续补 `expected_parent_ids`。
-- **只测检索层**：不测最终回答是否忠实；答案正确性、忠实度和引用支持率需要 LLM judge 或人工抽检。
-- **4 条不可回答样本**目前只统计“是否零召回”，不能替代最终拒答评测。
+- **检索评测只测检索层**：答案正确性、忠实度和引用支持率见第 6 节答案评测。
+- **检索层的 4 条不可回答样本**只统计“是否零召回”；答案评测额外补了 6 条，共 10 条用于拒答指标。
 - **violet 语料不提交**：默认在 `data/violet-evergarden-kb/`，公开仓库没有完整语料；课程提交包可以自带，或用 `--corpus-dir` / `VIOLET_KB_DIR` 指定。
 - **分块消融另开实验**：修改 chunk size / overlap 需要重建索引，不能直接复用当前 `violet-kb` 的向量。
+
+## 6. 答案评测
+
+`evals/answer_eval.py` 调用真实 `/chat_with_agent/stream`，在检索评测之外补：
+
+- Judge A：对照 `reference_answer` / `required_facts` 的 0/1/2 正确性评分；
+- Judge B：claim 级忠实度 + `[n]` 引用支持；
+- 确定性 `Hit@5`、`ExpectedContextCoverage`、`Citation Precision`、`Refusal Accuracy`。
+
+```bash
+# 3 条 pilot
+python evals/answer_eval.py --limit 3
+
+# 50 条 + 6 条补充拒答
+python evals/answer_eval.py --run-id full
+
+# 断点续跑 / 只重跑 judge / 只跑生成
+python evals/answer_eval.py --run-id full --resume
+python evals/answer_eval.py --run-id full --rejudge
+python evals/answer_eval.py --no-judge --limit 10
+```
+
+默认 `violet-kb`、`fast`、`top_k=5`、`judge_model=qwen-plus`。结果写入 `evals/results/answer_violet_<run_id>.jsonl`、`_summary.json`、`_report.md` 和 `_human_review.csv`。方法与指标定义见 [`docs/answer-eval.md`](../docs/answer-eval.md)。
+
+本次 56 条（46 可回答 + 10 不可回答）结果：
+
+| 指标 | 结果 |
+|---|---:|
+| 完全正确率 | 93.5%（43/46） |
+| 忠实度（strict） | 97.6% |
+| 引用有效率 / 精确率 / 覆盖率 | 98.8% / 98.0% / 94.3% |
+| Chunk 支持率 | 78.1% |
+| 拒答准确率 | 100%（10/10） |
+| 误拒率 | 4.3%（2/46） |
+| Hit@5（重建上下文） | 95.7% |
+| ExpectedContextCoverage | 86.2% |
+
+完整报告、摘要和人工抽检表见 [`docs/answer-eval-report.md`](../docs/answer-eval-report.md)、[`docs/answer-eval-summary.json`](../docs/answer-eval-summary.json)、[`docs/answer-eval-human-review.csv`](../docs/answer-eval-human-review.csv)。
+
+边界：
+
+- 上下文按 trace 查询重建，会多一次检索调用；`Hit@5` 仅作答案评测诊断，官方检索指标以 `run_eval.py` 为准；
+- 文档级标签仍未升级为父块级；
+- judge 与生成模型默认同为 `qwen-plus`，需要人工抽检和 `--judge-model` 交叉验证。

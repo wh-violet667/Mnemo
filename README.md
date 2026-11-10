@@ -46,9 +46,27 @@ Mnemo 围绕这两点做了四件事：
 - `fast` 的 MRR 略高于 baseline，但 **deep / auto 没有继续提升**；deep 的 P95 约 12 秒，auto 约 8 秒，约为 fast 的 4–5 倍。
 - 因此当前 Agentic-lite 的价值是**可控的多轮轨迹和可观测性**，不是已经被数据证明的质量提升。
 - 当前默认模式是 `fast`；需要多轮反思时显式选择 `auto` 或 `deep`。
-- violet 的标签是文档级（命中该文件任意父块即判对），MRR/Recall 偏乐观；答案级评测仍需补 LLM judge。
+- violet 的标签是文档级（命中该文件任意父块即判对），MRR/Recall 偏乐观；答案级指标见下节。
 
-复现方式见 [检索评测](#检索评测)。
+### 答案评测
+
+56 条（46 可回答 + 10 不可回答），`violet-kb` / `fast` / `top_k=5`，Judge 使用 `qwen-plus`：
+
+| 指标 | 结果 |
+|---|---:|
+| 完全正确率 | 93.5%（43/46） |
+| 忠实度（strict） | 97.6% |
+| 引用有效率 / 精确率 / 覆盖率 | 98.8% / 98.0% / 94.3% |
+| Chunk 支持率 | 78.1% |
+| 拒答准确率 | 100%（10/10） |
+| 误拒率 | 4.3%（2/46） |
+| Hit@5（重建上下文） | 95.7% |
+| ExpectedContextCoverage | 86.2% |
+| P50 / P95 | 8.9s / 16.5s |
+
+3 条失败样本：`v-q007`、`v-q008` 误拒，`v-q033` 把“外传在剧场版之前”答成“无直接先后顺序”。完整指标和低分样本见 [`docs/answer-eval-report.md`](docs/answer-eval-report.md)，12 条人工抽检表见 [`docs/answer-eval-human-review.csv`](docs/answer-eval-human-review.csv)（待人工填写）。
+
+复现方式见 [检索评测](#检索评测) 和 [答案评测](#答案评测)。
 
 ## 架构
 
@@ -366,7 +384,31 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 
 输出 Recall@5、MRR、P50/P95、分题型指标和未命中样本。完整语料不提交到公开仓库，放置说明见 [`data/README.md`](data/README.md)，评测细节见 [`evals/README.md`](evals/README.md)。
 
-> violet 的标签是文档级：命中 `expected_files` 中任意文件的任意父块即判对，指标偏乐观。答案正确性、忠实度和引用支持率还需要单独的 LLM judge。
+> violet 的标签是文档级：命中 `expected_files` 中任意文件的任意父块即判对，指标偏乐观。答案正确性、忠实度和引用支持率由单独的答案评测补齐。
+
+## 答案评测
+
+`evals/answer_eval.py` 调用真实 `/chat_with_agent/stream`，默认 `fast` / `top_k=5` / `violet-kb`。它把答案拆成两层判断：
+
+- **Judge A**：对照 `reference_answer` / `required_facts` 判 0/1/2 分；
+- **Judge B**：对照检索上下文判 claim 忠实度，并检查 `[n]` 引用是否有效、是否支持对应 claim。
+
+```bash
+# 3 条 pilot
+python evals/answer_eval.py --limit 3
+
+# 完整 50 条 + 6 条补充拒答
+python evals/answer_eval.py --run-id full
+
+# 断点续跑；只重跑 judge；只跑生成、不调用 judge
+python evals/answer_eval.py --run-id full --resume
+python evals/answer_eval.py --run-id full --rejudge
+python evals/answer_eval.py --no-judge --limit 10
+```
+
+输出 `answer_violet_<run_id>.jsonl`、summary、report 和人工抽检 CSV 到 `evals/results/`。指标包括 Fully Correct Rate、Faithfulness、Citation Precision / Coverage / Chunk Support、Refusal Accuracy、ExpectedContextCoverage 和 `Correctness | hit/miss`。方法与边界见 [`docs/answer-eval.md`](docs/answer-eval.md)。
+
+> 答案评测中的 Hit@5 基于 trace 查询重建的上下文，只作诊断；官方检索指标仍以 `run_eval.py` 为准。
 
 ## 测试
 
@@ -374,7 +416,7 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 python -m pytest -q
 ```
 
-当前 60 个测试（含参数化），覆盖：
+当前 70 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
 - Recall@k / MRR / 分位数
@@ -417,6 +459,10 @@ Mnemo/
 │   └── streaming.py             # 后台流式读取与停止控制
 ├── assets/                      # README 截图
 ├── docs/
+│   ├── answer-eval.md            # 答案评测方法、指标与报告说明
+│   ├── answer-eval-report.md     # 56 条答案评测报告
+│   ├── answer-eval-summary.json  # 答案评测聚合指标
+│   ├── answer-eval-human-review.csv # 12 条人工抽检表
 │   └── phase1-agentic-lite.md   # Agentic-lite 设计与实现文档
 ├── data/
 │   ├── README.md                # 本地语料说明
@@ -425,9 +471,13 @@ Mnemo/
 │   ├── build_violet_golden.py   # 转换 violet benchmark
 │   ├── seed_violet_kb.py        # 上传 12 份 DOCX 到 violet-kb
 │   ├── golden_violet.jsonl      # 50 条评测问题
-│   ├── run_eval.py              # baseline/fast/deep/auto 评测
+│   ├── unanswerable_violet.jsonl # 6 条补充拒答题
+│   ├── run_eval.py              # 检索层 baseline/fast/deep/auto
+│   ├── answer_eval.py           # 端到端答案评测 runner
+│   ├── answer_metrics.py        # 确定性指标
+│   ├── judges.py                # Judge A/B 提示词与解析
 │   └── README.md
-├── tests/                       # pytest（60 个测试）
+├── tests/                       # pytest（70 个测试）
 ├── scripts/                     # WSL/Docker 安装、Agentic 冒烟
 │   ├── 01-enable-wsl.*
 │   ├── 02-install-docker.ps1
@@ -442,6 +492,7 @@ Mnemo/
 - **单用户演示**：`MNEMO_USER_ID` 默认 1，没有登录和租户隔离，不能直接公开部署。
 - **评测集依赖本地语料**：50 条问题对应 12 份 DOCX，默认放在 `data/violet-evergarden-kb/`（不提交），可用 `--corpus-dir` / `VIOLET_KB_DIR` 指定；标签是文档级，MRR/Recall 偏乐观。
 - **Agentic 未显示质量增益**：在 violet 50 条上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 4-5 倍；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
+- **答案评测依赖 LLM judge**：Judge A/B 默认同为 `qwen-plus`，存在自偏好风险；`human_review.csv` 提供 12 条分层样本，正式结论前需要人工抽检或用 `--judge-model` 交叉验证。
 - **路由仍有误判**：`auto` 在 violet 50 条中有 2 条单跳问题被路由到 deep；需要更多路由测试集再调规则。
 - **没有 CI**：目前依靠本地 pytest 和手动评测，没有 GitHub Actions 门禁。
 - **前端仍以单文件为主**：请求流已拆到 `frontend/streaming.py`，但 `frontend/app.py` 仍承担约 1660 行 UI/CSS/状态，后续应继续拆分组件与状态。
@@ -455,9 +506,11 @@ Mnemo/
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace + 60 个测试
+- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 70 个测试
 - [x] 默认检索模式改为 `fast`，需要多轮时显式选择
-- [ ] Agentic 评测升级：更难多跳集、答案级 judge、critic 调优
+- [x] 答案评测：FactualCorrectness / Faithfulness / Citation / Refusal（violet 50 + 6 拒答）
+- [ ] 人工抽检 12–15 条并复核 Judge A/B
+- [ ] Agentic 评测升级：更难多跳集、critic 调优
 - [ ] 继续评估 `auto` 路由，若收益不足保持 `fast` 默认
 - [ ] 记忆 outbox：自动重试 Milvus 投影失败
 - [ ] LLM 冲突裁决：区分 ADD / UPDATE / NOOP
@@ -465,7 +518,7 @@ Mnemo/
 - [ ] 文档 `status=current/archived` 元数据过滤，解决版本区分
 - [ ] GitHub Actions：ruff + pytest + eval 格式检查
 - [ ] 应用 Dockerfile / compose 一键启动
-- [ ] 分块策略消融（chunk size / overlap）+ 答案正确性/忠实度（LLM judge）
+- [ ] 分块策略消融（chunk size / overlap）+ 答案评测复跑
 - [ ] 拆分 `frontend/app.py`
 
 
