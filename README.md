@@ -75,58 +75,60 @@ Mnemo 围绕这两点做了四件事：
 ## 架构
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Inter, Segoe UI, sans-serif", "fontSize": "14px", "lineColor": "#94a3b8", "primaryColor": "#eef4ff", "primaryTextColor": "#1e293b", "primaryBorderColor": "#93c5fd", "clusterBkg": "#f8fafc", "clusterBorder": "#e2e8f0"}}}%%
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Inter, Segoe UI, sans-serif","fontSize":"14px","lineColor":"#94a3b8","edgeLabelBackground":"#ffffff"},"flowchart":{"curve":"basis","nodeSpacing":30,"rankSpacing":42,"htmlLabels":true}}}%%
 flowchart LR
-    subgraph client["客户端"]
-        UI["🖥️ Streamlit<br/>:8501"]
-    end
+  subgraph client["客户端"]
+    direction TB
+    UI["Streamlit<br/>:8501"]
+  end
+  subgraph app["应用层"]
+    direction TB
+    API["FastAPI<br/>:8010"]
+    AGENT["LangGraph Agent"]
+    TOOLS["工具层<br/>检索 · 记忆 · 原始对话"]
+    BG["180s 记忆任务"]
+  end
+  subgraph data["数据层"]
+    direction TB
+    PG[("PostgreSQL<br/>事实源")]
+    MV[("Milvus<br/>检索索引")]
+    RD[("Redis<br/>checkpoint")]
+  end
+  subgraph ext["外部服务"]
+    direction TB
+    LLM["OpenCode Go<br/>DeepSeek V4.1 Flash"]
+    DS["DashScope<br/>embedding · rerank"]
+  end
 
-    subgraph app["应用层"]
-        API["⚡ FastAPI<br/>:8010"]
-        AGENT["🧠 LangGraph Agent<br/>deepseek-v4.1-flash"]
-        T1["🔍 search_knowledge_base"]
-        T2["🧩 get_memory"]
-        T3["💬 get_raw_conversation"]
-    end
+  UI -->|"HTTP / JSONL"| API
+  API --> AGENT
+  AGENT --> TOOLS
+  AGENT -->|"生成"| LLM
+  TOOLS -->|"embedding/rerank"| DS
+  TOOLS -->|"子块/记忆"| MV
+  TOOLS -->|"父块/原始对话"| PG
+  AGENT -.->|"checkpoint"| RD
+  BG -->|"单事务"| PG
+  BG -.->|"投影"| MV
+  PG -.->|"索引投影"| MV
 
-    subgraph data["数据与索引"]
-        PG[("🗄️ PostgreSQL<br/>事实源<br/>memories · versions · sources<br/>parent_chunks · raw_conversations")]
-        MV[("📦 Milvus<br/>检索投影<br/>knowledge_base_collection<br/>memory_collection")]
-        RD[("⚡ Redis<br/>checkpoint · 画像缓存")]
-    end
+  style client fill:#eff6ff,stroke:#bfdbfe,stroke-width:1px,color:#1e3a8a
+  style app fill:#f5f3ff,stroke:#ddd6fe,stroke-width:1px,color:#5b21b6
+  style data fill:#ecfdf5,stroke:#bbf7d0,stroke-width:1px,color:#065f46
+  style ext fill:#fff7ed,stroke:#fed7aa,stroke-width:1px,color:#9a3412
 
-    LLM["☁️ OpenCode Go<br/>DeepSeek V4.1 Flash"]
-    EXT["☁️ DashScope<br/>embedding · rerank"]
-    BG["⏱️ 180s 记忆任务"]
+  classDef client fill:#dbeafe,stroke:#60a5fa,color:#1e3a8a,stroke-width:1px
+  classDef app fill:#ede9fe,stroke:#a78bfa,color:#4c1d95,stroke-width:1px
+  classDef data fill:#d1fae5,stroke:#34d399,color:#065f46,stroke-width:1px
+  classDef ext fill:#ffedd5,stroke:#fb923c,color:#9a3412,stroke-width:1px
 
-    UI -->|"HTTP / 逐行 JSON"| API
-    API --> AGENT
-    AGENT --> T1
-    AGENT --> T2
-    AGENT --> T3
-
-    T1 -->|"子块召回"| MV
-    T2 -->|"active 记忆"| MV
-    T1 -->|"父块原文"| PG
-    T3 -->|"原始对话"| PG
-    PG -.->|"索引投影（可重建）"| MV
-    AGENT -.-> RD
-
-    T1 -->|"embedding / rerank"| EXT
-    T2 -->|"embedding"| EXT
-    AGENT -->|"生成"| LLM
-    BG -->|"Postgres 单事务"| PG
-    BG -.->|"Milvus 投影"| MV
-
-    classDef client fill:#eff6ff,stroke:#93c5fd,color:#1e3a8a
-    classDef app fill:#f5f3ff,stroke:#c4b5fd,color:#4c1d95
-    classDef data fill:#ecfdf5,stroke:#86efac,color:#065f46
-    classDef ext fill:#fff7ed,stroke:#fdba74,color:#9a3412
-    class UI client
-    class API,AGENT,T1,T2,T3 app
-    class PG,MV,RD data
-    class LLM,EXT,BG ext
+  class UI client
+  class API,AGENT,TOOLS,BG app
+  class PG,MV,RD data
+  class LLM,DS ext
 ```
+
+> 图中“工具层”对应 `search_knowledge_base` / `get_memory` / `get_raw_conversation`；`180s 记忆任务` 负责压缩对话并抽取长期记忆。
 
 **一次对话的链路**
 
