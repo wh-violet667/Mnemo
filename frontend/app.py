@@ -130,6 +130,25 @@ CSS = """
   section[data-testid="stSidebar"] .stButton button:hover {
     background: #26231f; color: #fff; border-color: transparent;
   }
+  section[data-testid="stSidebar"] [data-testid="stPopover"] button {
+    min-height: 30px; padding: 0 6px; border: 1px solid transparent;
+    background: transparent !important; color: var(--sidebar-muted) !important;
+    box-shadow: none !important; font-size: 1rem; line-height: 1;
+  }
+  section[data-testid="stSidebar"] [data-testid="stPopover"] button:hover {
+    background: #26231f !important; color: #fff !important;
+  }
+  div[data-baseweb="popover"] button[kind="primary"],
+  div[data-testid="stPopoverBody"] button[kind="primary"] {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: #fff !important;
+  }
+  div[data-baseweb="popover"] button[kind="primary"]:hover,
+  div[data-testid="stPopoverBody"] button[kind="primary"]:hover {
+    background: #a94a30 !important;
+    border-color: #a94a30 !important;
+  }
   section[data-testid="stSidebar"] .stButton button[kind="primary"] {
     background: var(--accent); color: #fff; font-weight: 600;
   }
@@ -372,6 +391,12 @@ CSS = """
     position: sticky; top: 0; z-index: 3; background: #fffcf7;
     padding-bottom: 2px;
   }
+  div.st-key-memory_header [data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+  }
+  div.st-key-memory_header [data-testid="stColumn"] {
+    min-width: 0 !important;
+  }
   .mem-card {
     border: 1px solid #e7dfd3; background: #fff; border-radius: 9px;
     padding: 9px 10px; margin: 0 0 7px;
@@ -426,20 +451,51 @@ CSS = """
   @media (max-width: 1100px) {
     .main-header .pills .pill:not(.accent) { display: none; }
     .msg-body { max-width: 100%; }
+
+    /* Narrow screens: keep the chat in place and turn the memory column into
+       a fixed right drawer with a scrim, instead of replacing the chat. */
     div[data-testid="stHorizontalBlock"]:has(.st-key-memory_panel) > div[data-testid="stColumn"]:first-child {
-      display: none !important;
+      display: block !important;
+      flex: 1 1 100% !important;
+      width: 100% !important;
+      min-width: 0 !important;
     }
     div[data-testid="stColumn"]:has(.st-key-memory_panel) {
-      flex: 1 1 100% !important; width: 100% !important; min-width: 0 !important;
+      position: fixed !important;
+      top: 0; right: 0; bottom: 0;
+      width: min(92vw, 420px) !important;
+      max-width: 420px !important;
+      min-width: 0 !important;
+      height: 100dvh !important;
+      z-index: 1000000;
+      padding: 0 !important;
+      margin: 0 !important;
+      background: transparent !important;
+    }
+    div[data-testid="stColumn"]:has(.st-key-memory_panel)::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: rgba(28, 26, 24, .34);
+      z-index: -1;
+      pointer-events: auto;
+    }
+    div[data-testid="stColumn"]:has(.st-key-memory_panel) > div {
+      height: 100% !important;
     }
     div.st-key-memory_panel {
-      height: calc(100vh - 48px) !important; max-height: 800px !important;
-      min-height: 0 !important; flex: 0 0 auto !important;
-      box-shadow: 0 18px 50px rgba(40, 28, 18, .12);
+      height: 100dvh !important;
+      max-height: 100dvh !important;
+      min-height: 0 !important;
+      border-radius: 0 !important;
+      border-right: 0 !important;
+      border-top: 0 !important;
+      border-bottom: 0 !important;
+      box-shadow: -18px 0 50px rgba(40, 28, 18, .22);
     }
     div[data-testid="stLayoutWrapper"]:has(> .st-key-memory_panel) {
-      height: calc(100vh - 48px) !important;
-      flex: 0 0 calc(100vh - 48px) !important;
+      height: 100dvh !important;
+      flex: 0 0 100dvh !important;
     }
   }
 </style>
@@ -470,6 +526,7 @@ DEFAULTS = {
     "confirm_delete_kb": False,
     "confirm_delete_chat": False,
     "show_all_conversations": False,
+    "files_expanded": {},
 }
 
 
@@ -1472,19 +1529,51 @@ def render_sidebar() -> None:
             conversations if (search or show_all) else conversations[:14]
         )
         for conversation in visible_conversations:
-            active = conversation["conversation_id"] == st.session_state.conversation_id
+            conversation_id = conversation["conversation_id"]
+            active = conversation_id == st.session_state.conversation_id
             full_title = conversation.get("title") or "新对话"
             title = full_title if len(full_title) <= 13 else full_title[:13] + "…"
             label = ("● " if active else "   ") + title
-            if st.button(
-                label,
-                key=f"conv_{conversation['conversation_id']}",
-                use_container_width=True,
-                type="primary" if active else "secondary",
-                help=full_title if len(full_title) > 13 else None,
-                disabled=streaming,
-            ):
-                select_conversation(conversation)
+            row_main, row_menu = st.columns([6, 1], vertical_alignment="center")
+            with row_main:
+                if st.button(
+                    label,
+                    key=f"conv_{conversation_id}",
+                    use_container_width=True,
+                    type="primary" if active else "secondary",
+                    help=full_title if len(full_title) > 13 else None,
+                    disabled=streaming,
+                ):
+                    select_conversation(conversation)
+            with row_menu:
+                with st.popover(
+                    "⋯",
+                    key=f"conv_menu_{conversation_id}",
+                    help="重命名会话",
+                ):
+                    new_title = st.text_input(
+                        "会话标题",
+                        value=full_title,
+                        key=f"rename_input_{conversation_id}",
+                        label_visibility="collapsed",
+                    )
+                    if st.button(
+                        "保存标题",
+                        key=f"rename_save_{conversation_id}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        try:
+                            api(
+                                "PATCH",
+                                f"/conversations/{conversation_id}",
+                                params={"user_id": USER_ID, "title": new_title},
+                                timeout=10,
+                            )
+                            refresh_conversations()
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"重命名失败：{exc}")
 
         if not visible_conversations:
             st.caption("没有匹配的会话")
@@ -1613,7 +1702,23 @@ def render_sidebar() -> None:
                         st.error(f"读取文件失败：{exc}")
                         files = []
                 if files:
-                    for index, file in enumerate(files[:12]):
+                    expanded_map = st.session_state.get("files_expanded", {}) or {}
+                    show_all_files = bool(expanded_map.get(selected_kb))
+                    if len(files) > 12:
+                        if st.button(
+                            "收起文件" if show_all_files else f"查看全部 {len(files)} 个文件",
+                            key=f"toggle_files_{selected_kb}",
+                            use_container_width=True,
+                        ):
+                            expanded_map = dict(expanded_map)
+                            expanded_map[selected_kb] = not show_all_files
+                            st.session_state.files_expanded = expanded_map
+                            st.rerun()
+                        st.caption(
+                            f"显示 {len(files) if show_all_files else 12}/{len(files)} 个文件"
+                        )
+                    visible_files = files if show_all_files else files[:12]
+                    for index, file in enumerate(visible_files):
                         file_col, action_col = st.columns([5, 1])
                         status = str(file.get("status") or "")
                         status_label = {
