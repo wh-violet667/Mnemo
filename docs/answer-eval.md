@@ -197,6 +197,28 @@ top_k = 5
 judge_model = qwen-plus
 ```
 
+`--top-k` 会作为 `top_k` 查询参数传给 `/chat_with_agent/stream`；后端缺省时回落到 `AGENT_TOP_K`。报告里打印的是实际请求值。
+
+### 5.1 运行身份
+
+每次 run 还会写 `_meta.json`，把数字绑定到产生它的语料和运行时：
+
+```text
+kb.fingerprint          # (file_hash, file_name, status) 的排序 SHA-256
+kb.files                # 本次参与评测的文件清单
+runtime.git             # 代码版本 + dirty 标记
+runtime.chunk_config    # 父子块大小 / overlap / separators
+runtime.models          # agent / summarization / embedding / rerank
+runtime.generation      # temperature / default_top_k
+eval.golden_sha256      # 评测集内容哈希
+eval.retrieval_mode     # fast / auto / deep / baseline
+eval.top_k              # 实际请求的召回数
+eval.judge_model        # Judge A/B 使用的模型
+eval.sample_count       # 本次实际评测的样本数
+```
+
+`--resume` 会比较这份身份；KB、代码、模型或 chunk 配置变化时拒绝续跑。要做可复现的答案评测，建议把 `AGENT_TEMPERATURE` 设为 `0`，并在报告里同时记录 `top_k` 和样本量。
+
 `--keep-conversations` 可保留评测会话；默认在结束后删除，避免污染数据库。
 
 ## 6. 输出
@@ -206,7 +228,7 @@ evals/results/answer_violet_<run_id>.jsonl          # 逐样本完整记录
 evals/results/answer_violet_<run_id>_summary.json   # 聚合指标
 evals/results/answer_violet_<run_id>_report.md      # 人读报告
 evals/results/answer_violet_<run_id>_human_review.csv
-evals/results/answer_violet_<run_id>_meta.json      # 配置快照
+evals/results/answer_violet_<run_id>_meta.json      # 运行身份（KB 指纹 + runtime + eval 配置）
 ```
 
 `human_review.csv` 默认抽 12 条，按低分和题型分层，供人工复核 Judge A/B。

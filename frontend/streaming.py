@@ -75,7 +75,6 @@ class StreamSession:
             "knowledge_base_id": self.knowledge_base_id,
             "user_id": USER_ID,
             "conversation_id": self.conversation_id,
-            "top_k": 5,
             "retrieval_mode": self.retrieval_mode,
         }
         response: Optional[requests.Response] = None

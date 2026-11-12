@@ -53,6 +53,26 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 
 输出 Recall@5、MRR、P50/P95 延迟、分题型指标和未命中样本。
 
+### 3.1 运行身份（每次 eval 都写）
+
+`run_eval.py` 和 `answer_eval.py` 都会写一份 `*_meta.json`，把本次 run 绑定到：
+
+| 字段 | 作用 |
+|---|---|
+| `kb.fingerprint` | 知识库文件 `(file_hash, file_name, status)` 的排序哈希；重灌、删除、重新处理文件都会改变它 |
+| `kb.files` | 本次参与评测的文件清单，便于和旧 run 做 diff |
+| `runtime.git` | 代码版本（短 SHA + dirty 标记） |
+| `runtime.chunk_config` | 父子块大小、overlap、separators |
+| `runtime.models` | agent / summarization / embedding / rerank 模型名 |
+| `runtime.generation` | 生成温度、服务端默认 top_k |
+| `eval.golden_sha256` | 评测集内容哈希 |
+| `eval.retrieval_mode` / `top_k` / `judge_model` | 影响本次数字的实验参数 |
+| `eval.sample_count` | 本次实际评测的样本数（含 `--limit` 的结果） |
+
+`answer_eval --resume` 会比较这份身份；KB、代码、模型或配置变化时拒绝续跑，避免把两次不同的实验拼成一个 run。
+
+`top_k` 现在会真正传给 `/chat_with_agent/stream`（后端缺省时回落到 `AGENT_TOP_K`），不再是只写进报告的装饰值。
+
 ## 4. 实测结果（50 条问题，k=5）
 
 | 模式 | Recall@5 | MRR | P50 | P95 |
@@ -76,6 +96,7 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 - **检索层的 4 条不可回答样本**只统计“是否零召回”；答案评测额外补了 6 条，共 10 条用于拒答指标。
 - **violet 语料不提交**：默认在 `data/violet-evergarden-kb/`，公开仓库没有完整语料；课程提交包可以自带，或用 `--corpus-dir` / `VIOLET_KB_DIR` 指定。
 - **分块消融另开实验**：修改 chunk size / overlap 需要重建索引，不能直接复用当前 `violet-kb` 的向量。
+- **meta 默认不进 Git**：`evals/results/` 被 `.gitignore` 忽略；提交报告时把需要引用的 `_meta.json` 复制到 `docs/`，或用 `--meta-output` 指定受跟踪的路径。
 
 ## 6. 答案评测
 
@@ -98,7 +119,7 @@ python evals/answer_eval.py --run-id full --rejudge
 python evals/answer_eval.py --no-judge --limit 10
 ```
 
-默认 `violet-kb`、`fast`、`top_k=5`、`judge_model=qwen-plus`。结果写入 `evals/results/answer_violet_<run_id>.jsonl`、`_summary.json`、`_report.md` 和 `_human_review.csv`。方法与指标定义见 [`docs/answer-eval.md`](../docs/answer-eval.md)。
+默认 `violet-kb`、`fast`、`top_k=5`、`judge_model=qwen-plus`。结果写入 `evals/results/answer_violet_<run_id>.jsonl`、`_summary.json`、`_report.md`、`_human_review.csv` 和 `_meta.json`。运行身份（KB 指纹 + 代码/模型/chunk 配置）写在 `_meta.json`；`--top-k` 会真正传给后端。方法与指标定义见 [`docs/answer-eval.md`](../docs/answer-eval.md)。
 
 本次 56 条（46 可回答 + 10 不可回答）结果：
 

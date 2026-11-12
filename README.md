@@ -66,6 +66,8 @@ Mnemo 围绕这两点做了四件事：
 
 3 条失败样本：`v-q007`、`v-q008` 误拒，`v-q033` 把“外传在剧场版之前”答成“无直接先后顺序”。完整指标和低分样本见 [`docs/answer-eval-report.md`](docs/answer-eval-report.md)，12 条人工抽检表见 [`docs/answer-eval-human-review.csv`](docs/answer-eval-human-review.csv)（待人工填写）。
 
+每次检索/答案评测还会写 `_meta.json`：KB 文件指纹 + 代码版本 + chunk 配置 + 模型名 + `top_k`。同一 `--run-id` 续跑时，身份不一致会直接拒绝，避免把两次不同实验拼成一个 run。
+
 复现方式见 [检索评测](#检索评测) 和 [答案评测](#答案评测)。
 
 ## 架构
@@ -288,6 +290,8 @@ cp .env.docker.example .env
 ```env
 DASHSCOPE_API_KEY=sk-...
 AGENT_BASE_MODEL=qwen-plus
+AGENT_TOP_K=5
+AGENT_TEMPERATURE=0.7
 SUMMARIZATION_MODEL=qwen-plus
 EMBEDDING_MODEL=text-embedding-v4
 RERANK_MODEL=qwen3-rerank
@@ -345,7 +349,8 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 
 | 分组 | 端点 |
 |---|---|
-| 对话 | `GET /chat_with_agent/stream`（支持 `retrieval_mode=auto/fast/deep`） |
+| 对话 | `GET /chat_with_agent/stream`（支持 `retrieval_mode=auto/fast/deep`、`top_k=1..50`） |
+| 运行时 | `GET /runtime`（评测溯源：代码版本、模型、chunk 配置；不含密钥） |
 | 知识库 | `POST/GET /knowledge-bases`、`DELETE /knowledge-bases/{id}` |
 | 文件 | `POST /document_upload`、`GET /knowledge-bases/{id}/files`、`DELETE /knowledge-bases/{id}/documents/{hash}` |
 | 会话 | `POST/GET /conversations`、`PATCH/DELETE /conversations/{id}`、`PATCH /conversations/{id}/knowledge-base`、`DELETE /conversations/{id}/last-turn`、`GET /conversations/{id}/messages` |
@@ -452,6 +457,7 @@ Mnemo/
 │   ├── milvus_client.py         # Milvus 客户端与代理
 │   ├── postgresql_client.py     # PostgreSQL 客户端、表结构与记忆事务
 │   ├── redis_cache.py           # Redis 客户端
+│   ├── runtime_identity.py      # 评测溯源：代码版本、模型、chunk 配置
 │   ├── settings.py              # 启动前环境变量校验
 │   └── main.py                  # 应用入口
 ├── frontend/
@@ -476,6 +482,7 @@ Mnemo/
 │   ├── answer_eval.py           # 端到端答案评测 runner
 │   ├── answer_metrics.py        # 确定性指标
 │   ├── judges.py                # Judge A/B 提示词与解析
+│   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
 ├── tests/                       # pytest（70 个测试）
 ├── scripts/                     # WSL/Docker 安装、Agentic 冒烟

@@ -399,6 +399,7 @@ GET /chat_with_agent/stream
   &user_id=1
   &conversation_id=...
   &retrieval_mode=auto
+  &top_k=5
 ```
 
 `retrieval_mode` 只接受：

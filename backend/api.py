@@ -11,6 +11,7 @@ from fastapi import (
     HTTPException,
     BackgroundTasks,
     Request,
+    Query,
     status,
     Depends,
 )
@@ -30,7 +31,9 @@ from agent import (
     trim_last_turn_checkpoint,
 )
 from conversations import make_thread_id, normalize_conversation_id
+import config
 from retrieval import load_agentic_config
+from runtime_identity import build_runtime_identity
 from schemas import (
     DocumentUploadResponse,
     DocumentDeleteResponse,
@@ -660,6 +663,17 @@ async def delete_memory(
     return {"status": "success", "deleted": deleted, "indexed": indexed}
 
 
+@router.get("/runtime")
+async def runtime_identity() -> dict:
+    """返回评测溯源所需的运行时身份（不含任何密钥）。
+
+    eval 脚本把该响应写入 `*_meta.json`，与 KB 指纹一起构成一次 run 的
+    身份；代码、模型或 chunk 配置变化时，旧 run 不再可复现。
+    """
+
+    return build_runtime_identity()
+
+
 @router.get("/chat_with_agent/stream")
 async def chat_with_agent(
     query: str,
@@ -667,6 +681,12 @@ async def chat_with_agent(
     user_id: int,
     conversation_id: str = "default",
     retrieval_mode: Optional[Literal["auto", "fast", "deep"]] = None,
+    top_k: Optional[int] = Query(
+        None,
+        ge=1,
+        le=50,
+        description="召回父块数；缺省时使用 AGENT_TOP_K（默认 5）。",
+    ),
     background_tasks: BackgroundTasks = None,
     postgresql_client=Depends(get_postgresql_client),
 ):
@@ -676,6 +696,7 @@ async def chat_with_agent(
     conversation_id 用于隔离上下文；同一个用户的不同会话各自拥有独立的
     Redis checkpoint（thread_id = user_id:conversation_id）。
     retrieval_mode 缺省时回落到 AGENTIC_DEFAULT_MODE 环境变量（默认 fast）。
+    top_k 缺省时回落到 AGENT_TOP_K（默认 5）；评测脚本会显式传入并记录实际值。
     """
     try:
         conversation_id = normalize_conversation_id(conversation_id)
@@ -695,6 +716,7 @@ async def chat_with_agent(
         logger.warning(f"更新会话标题失败: {e}")
 
     resolved_mode = retrieval_mode or load_agentic_config()["default_mode"]
+    resolved_top_k = top_k if top_k is not None else config.default_top_k
 
     return StreamingResponse(
         stream_agent_response(
@@ -704,6 +726,7 @@ async def chat_with_agent(
             conversation_id=conversation_id,
             background_tasks=background_tasks,
             retrieval_mode=resolved_mode,
+            top_k=resolved_top_k,
         ),
         media_type="text/plain; charset=utf-8",
     )

@@ -49,7 +49,7 @@ model = ChatOpenAI(
     model=os.getenv("AGENT_BASE_MODEL"),
     openai_api_key=os.getenv("DASHSCOPE_API_KEY"),
     openai_api_base=os.getenv("BASE_URL"),
-    temperature=0.7,
+    temperature=config.agent_temperature,
     streaming=True,
 )
 
@@ -238,6 +238,7 @@ async def stream_agent_response(
     background_tasks: BackgroundTasks = None,
     *,
     retrieval_mode: str,
+    top_k: int | None = None,
 ) -> AsyncGenerator[str, None]:
     # 1. 获取进程级 checkpointer
     start_time = time.time()
@@ -252,10 +253,15 @@ async def stream_agent_response(
     ai_message_parts = []
     thread_id = make_thread_id(user_id, conversation_id)
     try:
+        if top_k is None:
+            top_k = config.default_top_k
+        if top_k < 1:
+            raise ValueError(f"top_k must be >= 1, got {top_k}")
+
         context = ContextSchema(
             user_id=user_id,
             knowledge_base_id=knowledge_base_id,
-            top_k=5,
+            top_k=top_k,
             conversation_id=conversation_id,
             retrieval_mode=retrieval_mode,
         )

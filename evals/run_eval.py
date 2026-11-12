@@ -17,8 +17,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -26,8 +28,30 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 
+# Load .env before importing config-backed modules: runtime_identity reads
+# AGENT_TOP_K / AGENT_TEMPERATURE at import time.
+from dotenv import load_dotenv  # noqa: E402
+
+for _candidate in (ROOT / ".env", ROOT / "backend" / ".env"):
+    if _candidate.exists():
+        load_dotenv(_candidate)
+
 from evals.metrics import recall_at_k, reciprocal_rank, summarize  # noqa: E402
+from evals.run_identity import (  # noqa: E402
+    build_kb_block,
+    build_run_identity,
+    sha256_file,
+    write_json_atomic,
+)
 from backend.citations import order_by_rerank  # noqa: E402
+from runtime_identity import build_runtime_identity  # noqa: E402
+
+
+def _sanitize_run_id(value: str) -> str:
+    """Keep run ids path-safe; fall back to a timestamp when the input is empty."""
+
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "", value or "")
+    return cleaned[:40] or datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def load_golden(path: Path) -> List[Dict[str, Any]]:
@@ -177,6 +201,45 @@ async def evaluate(args) -> None:
     milvus_client = await get_milvus_client()
     postgresql_client = await get_postgresql_client()
 
+    # Bind this run to one corpus state and one runtime before the first query.
+    # A later KB change is detectable by re-fingerprinting, and the meta keeps
+    # the state the numbers were intended to describe.
+    kb_pairs = sorted(
+        {
+            (str(row.get("kb_id") or args.kb_id), int(row.get("user_id") or args.user_id))
+            for row in rows
+        }
+    )
+    kb_blocks = []
+    for kb_id, user_id in kb_pairs:
+        listing = await postgresql_client.get_knowledge_base_files(kb_id, user_id)
+        if not listing.get("success"):
+            raise SystemExit(
+                f"无法读取知识库 {kb_id!r} 的文件清单: {listing.get('message')}"
+            )
+        kb_blocks.append(build_kb_block(kb_id, user_id, listing.get("files") or []))
+
+    run_identity = build_run_identity(
+        runtime=build_runtime_identity(),
+        kb_blocks=kb_blocks,
+        eval_config={
+            "script": "run_eval",
+            "golden": str(Path(args.golden).resolve()),
+            "golden_sha256": sha256_file(args.golden),
+            "retrieval_mode": args.retrieval_mode,
+            "baseline_mode": args.mode,
+            "top_k": args.k,
+            "limit": args.limit,
+            "sample_count": len(rows),
+        },
+    )
+    meta_path = (
+        Path(args.meta_output)
+        if args.meta_output
+        else ROOT / "evals" / "results" / f"retrieval_{args.run_id}_meta.json"
+    )
+    write_json_atomic(meta_path, run_identity)
+
     results: List[Dict[str, Any]] = []
     for row in rows:
         kb_id = row.get("kb_id") or args.kb_id
@@ -250,12 +313,15 @@ async def evaluate(args) -> None:
     summary = summarize(scored_results, args.k) if scored_results else {}
     _print_report(summary, results, args)
 
+    print(f"\nmeta: {meta_path}")
+
     if args.output:
         payload = {
             "golden": str(args.golden),
             "mode": args.mode,
             "k": args.k,
             "summary": summary,
+            "run_identity": run_identity,
             "results": results,
         }
         output_path = Path(args.output)
@@ -263,7 +329,7 @@ async def evaluate(args) -> None:
         output_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        print(f"\n已写入 {output_path}")
+        print(f"已写入 {output_path}")
 
 
 def main() -> None:
@@ -293,9 +359,20 @@ def main() -> None:
     )
     parser.add_argument("--output", default="", help="把结果写成 JSON")
     parser.add_argument(
+        "--run-id",
+        default=datetime.now().strftime("%Y%m%d_%H%M%S"),
+        help="本次 run 的标识，用于默认 meta 文件名",
+    )
+    parser.add_argument(
+        "--meta-output",
+        default="",
+        help="运行身份 meta 路径；默认 evals/results/retrieval_<run_id>_meta.json",
+    )
+    parser.add_argument(
         "--check-only", action="store_true", help="只校验评测集格式，不连接数据库"
     )
     args = parser.parse_args()
+    args.run_id = _sanitize_run_id(args.run_id)
 
     if args.check_only:
         rows = load_golden(Path(args.golden))

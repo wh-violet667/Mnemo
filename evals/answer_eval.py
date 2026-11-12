@@ -28,7 +28,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -38,6 +38,12 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
+
+# Load .env before importing runtime_identity: it reads AGENT_TOP_K /
+# AGENT_TEMPERATURE at import time, and --rejudge builds a local identity.
+for _candidate in (ROOT / ".env", ROOT / "backend" / ".env"):
+    if _candidate.exists():
+        load_dotenv(_candidate)
 
 from evals.answer_metrics import (  # noqa: E402
     aggregate_records,
@@ -53,6 +59,16 @@ from evals.judges import (  # noqa: E402
     judge_correctness,
     judge_grounding,
 )
+from evals.run_identity import (  # noqa: E402
+    build_kb_block,
+    build_run_identity,
+    fetch_kb_files,
+    fetch_runtime,
+    sha256_file,
+    stable_identity,
+    write_json_atomic,
+)
+from runtime_identity import build_runtime_identity  # noqa: E402
 
 
 DEFAULT_GOLDEN = ROOT / "evals" / "golden_violet.jsonl"
@@ -116,6 +132,7 @@ async def fetch_answer(
         "user_id": args.user_id,
         "conversation_id": conversation_id,
         "retrieval_mode": args.retrieval_mode,
+        "top_k": args.top_k,
     }
     answer_parts: List[str] = []
     sources: List[Dict[str, Any]] = []
@@ -760,26 +777,62 @@ async def run(args: argparse.Namespace) -> None:
     output_path = output_dir / f"{stem}.jsonl"
     meta_path = output_dir / f"{stem}_meta.json"
 
-    meta = {
-        "golden": str(Path(args.golden)),
-        "unanswerable": str(Path(args.unanswerable)),
+    eval_config = {
+        "script": "answer_eval",
+        "golden": str(Path(args.golden).resolve()),
+        "golden_sha256": sha256_file(args.golden),
+        "unanswerable": str(Path(args.unanswerable).resolve()),
+        "unanswerable_sha256": (
+            sha256_file(args.unanswerable) if Path(args.unanswerable).exists() else None
+        ),
         "kb_id": args.kb_id,
         "user_id": args.user_id,
         "retrieval_mode": args.retrieval_mode,
         "top_k": args.top_k,
         "judge_model": None if args.no_judge else args.judge_model,
+        "limit": args.limit,
+        "sample_count": len(rows),
     }
-    if args.resume and meta_path.exists():
-        old_meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if old_meta != meta:
-            raise SystemExit(
-                "resume 配置与已有 meta 不一致，换一个 --run-id：\n"
-                f"old={old_meta}\nnew={meta}"
+
+    if args.rejudge:
+        # Rejudging does not regenerate answers; keep the original run's
+        # identity instead of recording the current process as its producer.
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        else:
+            meta = build_run_identity(
+                runtime=build_runtime_identity(),
+                kb_blocks=[],
+                eval_config={**eval_config, "rejudge": True, "kb_unavailable": True},
             )
+            write_json_atomic(meta_path, meta)
     else:
-        meta_path.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        async with httpx.AsyncClient(timeout=15.0) as meta_client:
+            try:
+                files = await fetch_kb_files(
+                    meta_client, args.base_url, args.kb_id, args.user_id
+                )
+                runtime = await fetch_runtime(meta_client, args.base_url)
+            except Exception as exc:
+                raise SystemExit(
+                    "无法读取评测身份（KB 文件清单 / /runtime）："
+                    f"{exc}；请先启动更新后的后端。"
+                ) from exc
+
+        meta = build_run_identity(
+            runtime=runtime,
+            kb_blocks=[build_kb_block(args.kb_id, args.user_id, files)],
+            eval_config=eval_config,
         )
+        if args.resume and meta_path.exists():
+            old_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if stable_identity(old_meta) != stable_identity(meta):
+                raise SystemExit(
+                    "resume 配置或语料身份与已有 meta 不一致，换一个 --run-id：\n"
+                    f"old={stable_identity(old_meta)}\nnew={stable_identity(meta)}"
+                )
+        else:
+            write_json_atomic(meta_path, meta)
 
     judge = None
     if not args.no_judge:
@@ -882,6 +935,7 @@ async def run(args: argparse.Namespace) -> None:
     print(f"written: {output_dir / (stem + '_summary.json')}")
     print(f"written: {output_dir / (stem + '_report.md')}")
     print(f"written: {output_dir / (stem + '_human_review.csv')}")
+    print(f"written: {meta_path}")
 
 
 def main() -> None:
@@ -917,6 +971,8 @@ def main() -> None:
     parser.add_argument("--run-id", default=datetime.now().strftime("%Y%m%d_%H%M%S"))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     args = parser.parse_args()
+    if not 1 <= args.top_k <= 50:
+        parser.error("--top-k must be between 1 and 50")
     asyncio.run(run(args))
 
 

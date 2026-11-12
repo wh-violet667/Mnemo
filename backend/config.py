@@ -1,3 +1,13 @@
+import os
+
+# 运行默认值：API、Agent 和评测身份都从这里读取，避免多处硬编码不一致。
+# AGENT_TOP_K 是服务端默认召回数；请求可以覆盖它（见 api.py 的 top_k 参数）。
+default_top_k = int(os.getenv("AGENT_TOP_K", "5"))
+if default_top_k < 1:
+    raise ValueError("AGENT_TOP_K must be >= 1")
+
+agent_temperature = float(os.getenv("AGENT_TEMPERATURE", "0.7"))
+
 # 文档切片配置
 parent_chunk_size = 1000
 parent_chunk_overlap = 200
