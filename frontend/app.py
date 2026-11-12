@@ -30,6 +30,12 @@ MEMORY_TYPES = {
     "procedural": ("程序", "proc"),
     "summary": ("摘要", "sum"),
 }
+MEMORY_TYPE_HELP = {
+    "semantic": "稳定事实与偏好",
+    "episodic": "具体事件与历史互动",
+    "procedural": "可复用的方法与步骤",
+    "summary": "一段对话的摘要",
+}
 FILTER_OPTIONS = ["全部", "语义", "情节", "程序", "摘要"]
 FILTER_TO_TYPE = {label: key for key, (label, _) in MEMORY_TYPES.items()}
 FILTER_TO_TYPE["全部"] = ""
@@ -222,30 +228,37 @@ CSS = """
   }
   .cite:hover { background: #cfe9e2; }
   .source-card {
-    margin-top: 10px; background: #fffdf9; border: 1px solid #e3dbce;
-    border-radius: 10px; max-width: 560px; overflow: hidden;
+    margin-top: 6px; background: #fffdf9; border: 1px solid #e3dbce;
+    border-radius: 9px; max-width: 560px; overflow: hidden;
+    scroll-margin-top: 14px;
   }
+  .source-preview {
+    margin-top: 2px; font-size: .7rem; line-height: 1.35; color: #6d6458;
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .source-card[open] .source-preview { display: none; }
   .source-summary {
-    display: flex; gap: 9px; align-items: flex-start; padding: 9px 11px;
+    display: flex; gap: 7px; align-items: flex-start; padding: 7px 9px;
     cursor: pointer; list-style: none; outline: none;
   }
   .source-summary::-webkit-details-marker { display: none; }
   .source-summary:hover { background: #faf4eb; }
   .source-head { min-width: 0; flex: 1; }
   .file-icon {
-    width: 30px; height: 34px; border-radius: 6px; background: #f4e6de;
-    color: #9e4c32; display: grid; place-items: center; flex: 0 0 auto; font-size: .72rem;
+    width: 26px; height: 30px; border-radius: 5px; background: #f4e6de;
+    color: #9e4c32; display: grid; place-items: center; flex: 0 0 auto; font-size: .6rem;
   }
-  .source-name { font-size: .78rem; font-weight: 700; color: var(--ink); }
-  .source-meta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+  .source-name { font-size: .74rem; font-weight: 700; color: var(--ink); }
+  .source-meta { font-size: .68rem; color: var(--muted); margin-top: 1px; }
   .source-toggle {
-    margin-left: auto; color: var(--accent-dark); font-size: .72rem; white-space: nowrap;
+    margin-left: auto; color: var(--accent-dark); font-size: .68rem; white-space: nowrap;
   }
   .source-toggle::before { content: "展开"; }
   .source-card[open] .source-toggle::before { content: "收起"; }
   .source-note { margin-top: 8px; font-size: .72rem; color: #6f665b; }
   .source-snippet {
-    font-size: .72rem; color: #6d6458; line-height: 1.5;
+    font-size: .78rem; color: #6d6458; line-height: 1.55;
     padding: 0 11px 10px 50px; max-height: 220px; overflow-y: auto;
     white-space: pre-wrap; word-break: break-word;
   }
@@ -282,11 +295,13 @@ CSS = """
     background: transparent !important; border-color: transparent !important;
     box-shadow: none !important;
   }
-  div[data-testid="stForm"] button {
+  div[data-testid="stForm"] [data-testid="stFormSubmitButton"] button {
     background: var(--accent) !important; color: #fff !important; border: 0 !important;
     border-radius: 8px !important; font-weight: 700 !important;
   }
-  div[data-testid="stForm"] button:hover { background: #a94a30 !important; }
+  div[data-testid="stForm"] [data-testid="stFormSubmitButton"] button:hover {
+    background: #a94a30 !important;
+  }
   div[data-testid="stForm"] div[data-testid="stElementContainer"]:has(
     div[data-testid="stFormSubmitButton"]
   ) { width: auto !important; margin-left: auto !important; }
@@ -294,19 +309,29 @@ CSS = """
     width: 38px !important; height: 38px !important; min-height: 38px !important;
     display: block !important; padding: 0 !important; border-radius: 10px !important;
   }
-  .composer-pill { font-size: .72rem; color: #6f665b; padding-top: 8px; }
-  .hintline { text-align: center; font-size: .72rem; color: #6f665b; margin-top: 5px; }
+  div.st-key-composer_shell {
+    background: var(--panel); border: 1px solid #ddd4c7; border-radius: 14px;
+    padding: 8px 12px 6px; box-shadow: 0 6px 22px rgba(60,45,30,.06);
+  }
+  div.st-key-composer_shell div[data-testid="stForm"] {
+    background: transparent !important; border: 0 !important;
+    box-shadow: none !important; padding: 0 !important;
+  }
+  .composer-pill { font-size: .72rem; color: #6f665b; padding-top: 2px; }
+  .hintline { text-align: center; font-size: .68rem; color: #6f665b; margin-top: 3px; }
 
   /* chat scroll area */
   div.st-key-chat_scroll {
-    height: calc(100vh - 340px) !important;
+    height: calc(100vh - 380px) !important;
+    height: calc(100dvh - 380px) !important;
     min-height: 220px;
     flex: 0 0 auto !important;
   }
   div[data-testid="stLayoutWrapper"]:has(> .st-key-chat_scroll) {
-    height: calc(100vh - 340px) !important;
+    height: calc(100vh - 380px) !important;
+    height: calc(100dvh - 380px) !important;
     min-height: 220px !important;
-    flex: 0 0 calc(100vh - 340px) !important;
+    flex: 0 0 calc(100vh - 380px) !important;
   }
 
 
@@ -338,23 +363,27 @@ CSS = """
   }
   .mem-head { display: flex; align-items: center; gap: 8px; }
   .mem-head h3 { margin: 0; font-size: .95rem; color: var(--ink); }
-  .mem-sub { font-size: .72rem; color: var(--muted); line-height: 1.45; margin: 3px 0 8px; }
+  .mem-sub { font-size: .68rem; color: var(--muted); line-height: 1.45; margin: 3px 0 8px; }
+  div.st-key-memory_header {
+    position: sticky; top: 0; z-index: 3; background: #fffcf7;
+    padding-bottom: 2px;
+  }
   .mem-card {
     border: 1px solid #e7dfd3; background: #fff; border-radius: 9px;
     padding: 9px 10px; margin: 0 0 7px;
   }
   .mem-top { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
   .mem-type {
-    font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
+    font-size: .64rem; letter-spacing: .04em; text-transform: uppercase;
     border-radius: 3px; padding: 1px 5px; font-weight: 700;
   }
   .t-sem { color: #0f6b60; background: #e4f2ee; }
   .t-epi { color: #8a5a22; background: #f7ecd9; }
   .t-proc { color: #5a4a8a; background: #eeeafa; }
   .t-sum { color: #6d6255; background: #f0ebe3; }
-  .mem-score { margin-left: auto; font: .72rem ui-monospace, Consolas, monospace; color: #6f665b; }
-  .mem-content { font-size: .74rem; line-height: 1.5; color: #3a332c; }
-  .mem-meta { display: flex; gap: 5px; margin-top: 5px; color: #6f665b; font-size: .72rem; }
+  .mem-score { margin-left: auto; font-size: .64rem; color: #6f665b; }
+  .mem-content { font-size: .78rem; line-height: 1.5; color: #3a332c; }
+  .mem-meta { display: flex; gap: 5px; margin-top: 4px; color: #6f665b; font-size: .68rem; }
   .mem-confirm { margin: 2px 0 6px; color: #9a4229; font-size: .72rem; }
   .mem-more { margin-top: 3px; }
   .mem-more summary {
@@ -385,6 +414,11 @@ CSS = """
   .welcome p { margin: 0 auto; max-width: 430px; color: var(--muted); font-size: .8rem; line-height: 1.6; }
   .welcome .marks { margin: 18px auto 0; color: #7a7064; font-size: .72rem; letter-spacing: .08em; }
 
+  @media (min-width: 900px) {
+    section[data-testid="stSidebar"] {
+      width: 300px !important; min-width: 280px !important; max-width: 320px !important;
+    }
+  }
   @media (max-width: 1100px) {
     .main-header .pills .pill:not(.accent) { display: none; }
     .msg-body { max-width: 100%; }
@@ -431,6 +465,7 @@ DEFAULTS = {
     "history_loaded_for": None,
     "confirm_delete_kb": False,
     "confirm_delete_chat": False,
+    "show_all_conversations": False,
 }
 
 
@@ -456,6 +491,60 @@ def api(method: str, path: str, **kwargs) -> Any:
             except Exception:
                 detail = (exc.response.text or "")[:200]
         raise RuntimeError(detail or str(exc)) from exc
+
+
+def _relative_time(value: Any) -> str:
+    """Human-friendly timestamp for memory cards; 0 means never accessed."""
+    try:
+        stamp = int(value or 0)
+    except (TypeError, ValueError):
+        return "未访问"
+    if stamp <= 0:
+        return "未访问"
+    delta = max(0, int(datetime.now().timestamp()) - stamp)
+    if delta < 60:
+        return "刚刚"
+    if delta < 3600:
+        return f"{delta // 60} 分钟前"
+    if delta < 86400:
+        return f"{delta // 3600} 小时前"
+    if delta < 7 * 86400:
+        return f"{delta // 86400} 天前"
+    return datetime.fromtimestamp(stamp).strftime("%m-%d")
+
+
+def _importance_label(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return "—"
+    if value >= 0.85:
+        return "高"
+    if value >= 0.7:
+        return "中"
+    return "低"
+
+
+def _relevance_label(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return "引用片段"
+    if value >= 0.85:
+        return "高相关"
+    if value >= 0.75:
+        return "中相关"
+    return "参考"
+
+
+def _index_status(files: List[Dict[str, Any]]) -> tuple[str, str]:
+    total = len(files or [])
+    if total == 0:
+        return "未索引", "#8a8074"
+    statuses = [str(item.get("status") or "").lower() for item in files]
+    failed = statuses.count("failed")
+    processing = statuses.count("processing")
+    if failed:
+        return f"索引异常 · {failed} 个文件失败", "#b91c1c"
+    if processing:
+        return f"索引中 · {processing}/{total}", "#b45309"
+    return f"索引就绪 · {total} 个文件", "#5f8b62"
 
 
 def fetch_conversations() -> List[Dict[str, Any]]:
@@ -806,6 +895,55 @@ def retry_last_answer() -> None:
 
 
 # ---------------------------------------------------------------- rendering
+def render_sources_html(
+    sources: Optional[List[Dict[str, Any]]],
+    anchor_key: str = "msg",
+    sources_from_previous_turn: bool = False,
+) -> str:
+    """Render the compact evidence list separately from the answer body.
+
+    Keeping sources out of ``render_message`` lets the message actions sit
+    directly under the answer instead of below a wall of evidence cards.
+    """
+
+    source_html = ""
+    if sources_from_previous_turn and sources:
+        source_html += (
+            "<div class='source-note'>本轮未重新检索，沿用上一轮来源</div>"
+        )
+    for source in sources or []:
+        index = html.escape(str(source.get("index", "")))
+        raw_name = str(source.get("file_name", "未知文件"))
+        file_name = html.escape(raw_name)
+        extension = raw_name.rsplit(".", 1)[-1].lower() if "." in raw_name else ""
+        icon = {"pdf": "PDF", "docx": "DOC", "doc": "DOC", "txt": "TXT"}.get(
+            extension, "FILE"
+        )
+        snippet = html.escape(str(source.get("snippet", "")))
+        preview = snippet[:90].rstrip() + ("…" if len(snippet) > 90 else "")
+        score = source.get("score")
+        meta = _relevance_label(score)
+        score_title = (
+            f" title='相关度 {score:.3f}'" if isinstance(score, (int, float)) else ""
+        )
+        source_id = f"source-{html.escape(anchor_key or 'msg')}-{index}"
+        source_html += (
+            f"<details class='source-card' id='{source_id}'>"
+            "<summary class='source-summary'>"
+            f"<div class='file-icon'>{icon}</div>"
+            "<div class='source-head'>"
+            f"<div class='source-name'>[{index}] {file_name}</div>"
+            f"<div class='source-meta'{score_title}>{meta}</div>"
+            f"<div class='source-preview'>{preview}</div>"
+            "</div>"
+            "<span class='source-toggle'></span>"
+            "</summary>"
+            f"<div class='source-snippet'>{snippet}</div>"
+            "</details>"
+        )
+    return source_html
+
+
 def render_message(
     role: str,
     content: str,
@@ -815,6 +953,7 @@ def render_message(
     sources_from_previous_turn: bool = False,
     anchor_key: str = "msg",
     trace: Optional[Dict[str, Any]] = None,
+    show_sources: bool = True,
 ) -> str:
     if role == "user":
         return (
@@ -866,38 +1005,11 @@ def render_message(
             parts.append("Agentic 关闭已降级")
         trace_html = f"<div class='source-note'>{' · '.join(parts)}</div>"
 
-    source_html = ""
-    if sources_from_previous_turn and sources:
-        source_html += (
-            "<div class='source-note'>本轮未重新检索，沿用上一轮来源</div>"
-        )
-    for source in (sources or [])[:5]:
-        index = html.escape(str(source.get("index", "")))
-        raw_name = str(source.get("file_name", "未知文件"))
-        file_name = html.escape(raw_name)
-        extension = raw_name.rsplit(".", 1)[-1].lower() if "." in raw_name else ""
-        icon = {"pdf": "PDF", "docx": "DOC", "doc": "DOC", "txt": "TXT"}.get(
-            extension, "FILE"
-        )
-        snippet = html.escape(str(source.get("snippet", "")))
-        score = source.get("score")
-        meta = "引用片段"
-        if isinstance(score, (int, float)):
-            meta = f"相关度 {score:.3f}"
-        source_id = f"source-{anchor}-{index}"
-        source_html += (
-            f"<details class='source-card' id='{source_id}' open>"
-            "<summary class='source-summary'>"
-            f"<div class='file-icon'>{icon}</div>"
-            "<div class='source-head'>"
-            f"<div class='source-name'>[{index}] {file_name}</div>"
-            f"<div class='source-meta'>{meta}</div>"
-            "</div>"
-            "<span class='source-toggle'></span>"
-            "</summary>"
-            f"<div class='source-snippet'>{snippet}</div>"
-            "</details>"
-        )
+    source_html = (
+        render_sources_html(sources, anchor_key, sources_from_previous_turn)
+        if show_sources
+        else ""
+    )
 
     status = (
         "<span class='msg-status'>正在生成…</span>"
@@ -949,8 +1061,9 @@ def render_header() -> None:
     )
     title = html.escape(current.get("title") or "新对话")
     kb = html.escape(st.session_state.selected_kb or "未选择知识库")
-    file_count = len(st.session_state.kb_files.get(st.session_state.selected_kb, []) or [])
-    file_text = f" · {file_count} 文件" if file_count else ""
+    files = st.session_state.kb_files.get(st.session_state.selected_kb, []) or []
+    status_text, dot_color = _index_status(files)
+    status_line = f"{kb} · {status_text}" if st.session_state.selected_kb else kb
     memory_status = (
         "记忆 · 离线"
         if st.session_state.memory_error
@@ -959,11 +1072,11 @@ def render_header() -> None:
     st.markdown(
         "<div class='main-header'>"
         f"<div><h1>{title}</h1>"
-        f"<div class='sub'><span class='dot'></span>{kb}{file_text} · 已保存</div></div>"
+        f"<div class='sub'><span class='dot' style='background:{dot_color}'></span>"
+        f"{status_line}</div></div>"
         "<div class='pills'>"
         f"<span class='pill accent'>{memory_status}</span>"
-        "<span class='pill'>qwen-plus</span>"
-        "<span class='pill'>qwen3-rerank</span>"
+        "<span class='pill' title='生成 qwen-plus · 重排 qwen3-rerank · 向量 text-embedding-v4'>详情</span>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -971,38 +1084,42 @@ def render_header() -> None:
 
 def render_composer() -> None:
     streaming = bool(st.session_state.get("active_stream"))
-    with st.form("composer", clear_on_submit=True):
-        prompt = st.text_area(
-            "消息",
-            height=62,
-            placeholder="继续追问，或让我总结一份文档…",
-            label_visibility="collapsed",
-            disabled=streaming,
-        )
-        col1, col2, col3 = st.columns([1.5, 1.5, 0.45])
-        with col1:
+    with st.container(key="composer_shell"):
+        toolbar_left, toolbar_right = st.columns([1.2, 3.8], vertical_alignment="center")
+        with toolbar_left:
             st.markdown(
                 f"<div class='composer-pill'>知识库 · "
                 f"{html.escape(st.session_state.selected_kb or '未选择')}</div>",
                 unsafe_allow_html=True,
             )
-        with col2:
-            st.markdown("<div class='composer-pill'>模型 · qwen-plus</div>", unsafe_allow_html=True)
-        with col3:
-            submitted = st.form_submit_button(
-                "↑", use_container_width=False, disabled=streaming
+        with toolbar_right:
+            st.segmented_control(
+                "检索模式",
+                options=["fast", "auto", "deep"],
+                format_func=lambda m: {"auto": "自动", "fast": "快速", "deep": "深入"}[m],
+                key="retrieval_mode",
+                label_visibility="collapsed",
+                disabled=streaming,
             )
-    st.markdown(
-        "<div class='hintline'>Ctrl + Enter 发送 · Enter 换行 · 回答会标注来源</div>",
-        unsafe_allow_html=True,
-    )
-    st.segmented_control(
-        "检索模式",
-        options=["fast", "auto", "deep"],
-        format_func=lambda m: {"auto": "自动", "fast": "快速", "deep": "深入"}[m],
-        key="retrieval_mode",
-        label_visibility="collapsed",
-    )
+
+        with st.form("composer", clear_on_submit=True):
+            input_col, send_col = st.columns([6, 1], vertical_alignment="bottom")
+            with input_col:
+                prompt = st.text_area(
+                    "消息",
+                    height=54,
+                    placeholder="继续追问，或让我总结一份文档…",
+                    label_visibility="collapsed",
+                    disabled=streaming,
+                )
+            with send_col:
+                submitted = st.form_submit_button(
+                    "↑", help="发送", use_container_width=False, disabled=streaming
+                )
+        st.markdown(
+            "<div class='hintline'>Ctrl + Enter 发送 · Enter 换行 · 回答会标注来源</div>",
+            unsafe_allow_html=True,
+        )
     if submitted and prompt.strip():
         send_query(prompt)
 
@@ -1057,13 +1174,18 @@ def render_live_stream() -> None:
             render_message(
                 "assistant",
                 snap["answer"],
-                snap["sources"],
                 streaming=True,
                 anchor_key="live",
                 trace=snap.get("trace"),
+                show_sources=False,
             ),
             unsafe_allow_html=True,
         )
+        if snap["sources"]:
+            st.markdown(
+                render_sources_html(snap["sources"], "live"),
+                unsafe_allow_html=True,
+            )
     elif snap["status"]:
         st.markdown(
             f"<div class='status-line'>{html.escape(snap['status'])}</div>",
@@ -1102,7 +1224,7 @@ def render_message_actions(
     with st.container(key=f"msg_actions_{index}"):
         copy_col, action_col, _ = st.columns([1, 2, 7])
         with copy_col:
-            with st.popover("复制", use_container_width=False):
+            with st.popover("复制", use_container_width=False, key=f"copy_{index}"):
                 st.code(message.get("content", ""), language=None)
         if is_last:
             with action_col:
@@ -1124,37 +1246,37 @@ def render_message_actions(
 
 def render_memory_panel() -> None:
     with st.container(height=MEMORY_HEIGHT, border=True, key="memory_panel"):
-        title_col, refresh_col, close_col = st.columns(
-            [5, 1, 1], vertical_alignment="center"
-        )
-        with title_col:
-            count_label = (
-                "离线" if st.session_state.memory_error else f"{len(st.session_state.memories)} 条"
+        with st.container(key="memory_header"):
+            title_col, refresh_col, close_col = st.columns(
+                [5, 1, 1], vertical_alignment="center"
             )
-            st.markdown(
-                "<div class='mem-head'><h3>记忆</h3>"
-                f"<span class='pill' style='height:22px;font-size:.72rem'>{count_label}</span></div>",
-                unsafe_allow_html=True,
-            )
-        with refresh_col:
-            if st.button("↻", key="refresh_memory", type="tertiary", help="刷新记忆"):
-                try:
-                    memories = fetch_memories()
-                    st.session_state.memories = memories
-                    st.session_state.memory_count = len(memories)
-                    st.session_state.memory_error = ""
+            with title_col:
+                count_label = (
+                    "离线" if st.session_state.memory_error else f"{len(st.session_state.memories)} 条"
+                )
+                st.markdown(
+                    "<div class='mem-head'><h3>记忆</h3>"
+                    f"<span class='pill' style='height:22px;font-size:.72rem'>{count_label}</span></div>",
+                    unsafe_allow_html=True,
+                )
+            with refresh_col:
+                if st.button("↻", key="refresh_memory", type="tertiary", help="刷新记忆"):
+                    try:
+                        memories = fetch_memories()
+                        st.session_state.memories = memories
+                        st.session_state.memory_count = len(memories)
+                        st.session_state.memory_error = ""
+                        st.rerun()
+                    except Exception as exc:
+                        st.session_state.memory_error = str(exc)
+                        st.rerun()
+            with close_col:
+                if st.button("✕", key="close_memory", type="tertiary", help="关闭记忆抽屉"):
+                    st.session_state.memory_open = False
                     st.rerun()
-                except Exception as exc:
-                    st.session_state.memory_error = str(exc)
-                    st.rerun()
-        with close_col:
-            if st.button("✕", key="close_memory", type="tertiary", help="关闭记忆抽屉"):
-                st.session_state.memory_open = False
-                st.rerun()
 
         st.markdown(
-            "<div class='mem-sub'>每 180 秒检查一次，超过 400 tokens 自动整理；"
-            "删除后不再参与后续检索。</div>",
+            "<div class='mem-sub'>对话足够长后自动整理；删除后不再参与后续检索。</div>",
             unsafe_allow_html=True,
         )
 
@@ -1212,19 +1334,25 @@ def render_memory_panel() -> None:
             for memory in memories:
                 memory_type = memory.get("memory_type", "summary")
                 label, css_class = MEMORY_TYPES.get(memory_type, ("摘要", "sum"))
+                type_help = MEMORY_TYPE_HELP.get(memory_type, "")
                 importance = memory.get("importance")
-                score = f"重要性 {float(importance):.1f}" if isinstance(importance, (int, float)) else "—"
+                score = _importance_label(importance)
+                score_title = (
+                    f" title='重要性 {float(importance):.2f}'"
+                    if isinstance(importance, (int, float))
+                    else ""
+                )
                 created = memory.get("created_at")
                 try:
-                    created_text = datetime.fromtimestamp(int(created)).strftime("%m-%d %H:%M")
+                    created_text = datetime.fromtimestamp(int(created)).strftime("%m-%d")
                 except Exception:
                     created_text = "—"
-                accessed = memory.get("last_access_at")
-                try:
-                    accessed_text = datetime.fromtimestamp(int(accessed)).strftime("%m-%d %H:%M")
-                    meta_text = f"创建 {created_text} · 访问 {accessed_text}"
-                except Exception:
-                    meta_text = f"创建 {created_text}"
+                accessed_text = _relative_time(memory.get("last_access_at"))
+                meta_text = (
+                    f"未访问 · 创建 {created_text}"
+                    if accessed_text == "未访问"
+                    else f"{accessed_text} 使用 · 创建 {created_text}"
+                )
                 content = html.escape(str(memory.get("content") or ""))
                 preview = (
                     content if len(content) <= 120 else content[:120].rstrip() + "…"
@@ -1240,8 +1368,8 @@ def render_memory_panel() -> None:
                     st.markdown(
                         "<div class='mem-card'>"
                         "<div class='mem-top'>"
-                        f"<span class='mem-type t-{css_class}'>{label}</span>"
-                        f"<span class='mem-score'>{score}</span>"
+                        f"<span class='mem-type t-{css_class}' title='{type_help}'>{label}</span>"
+                        f"<span class='mem-score'{score_title}>{score}</span>"
                         "</div>"
                         f"<div class='mem-content'>{preview}</div>"
                         f"{more_html}"
@@ -1250,27 +1378,14 @@ def render_memory_panel() -> None:
                         unsafe_allow_html=True,
                     )
                 memory_id = memory.get("id")
-                confirm_key = f"confirm_mem_{memory_id}"
                 with action_col:
-                    if st.button(
-                        "✕",
-                        key=f"del_mem_{memory_id}",
-                        help="删除这条记忆",
-                        type="tertiary",
+                    with st.popover(
+                        "⋯", help="更多操作", key=f"mem_menu_{memory_id}"
                     ):
-                        st.session_state[confirm_key] = True
-                        st.rerun()
-
-                if st.session_state.get(confirm_key):
-                    st.markdown(
-                        "<div class='mem-confirm'>确认删除这条记忆？</div>",
-                        unsafe_allow_html=True,
-                    )
-                    yes_col, no_col, _ = st.columns([1, 1, 5])
-                    with yes_col:
+                        st.caption("删除后不再参与检索。")
                         if st.button(
-                            "确认",
-                            key=f"confirm_mem_yes_{memory_id}",
+                            "删除这条记忆",
+                            key=f"del_mem_{memory_id}",
                             type="primary",
                             use_container_width=True,
                         ):
@@ -1289,19 +1404,9 @@ def render_memory_panel() -> None:
                                 st.session_state.memory_count = len(
                                     st.session_state.memories
                                 )
-                                st.session_state[confirm_key] = False
                                 st.rerun()
                             except Exception as exc:
-                                st.session_state[confirm_key] = False
                                 st.error(f"删除失败：{exc}")
-                    with no_col:
-                        if st.button(
-                            "取消",
-                            key=f"confirm_mem_no_{memory_id}",
-                            use_container_width=True,
-                        ):
-                            st.session_state[confirm_key] = False
-                            st.rerun()
 
         st.markdown(
             "<div class='mem-foot'>记忆是用户级数据，不随会话删除。</div>",
@@ -1347,11 +1452,11 @@ def render_sidebar() -> None:
                 if search.lower() in (item.get("title") or "").lower()
             ]
 
-        shown = 0
-        for conversation in conversations:
-            if shown >= 14:
-                break
-            shown += 1
+        show_all = bool(st.session_state.get("show_all_conversations"))
+        visible_conversations = (
+            conversations if (search or show_all) else conversations[:14]
+        )
+        for conversation in visible_conversations:
             active = conversation["conversation_id"] == st.session_state.conversation_id
             full_title = conversation.get("title") or "新对话"
             title = full_title if len(full_title) <= 13 else full_title[:13] + "…"
@@ -1366,8 +1471,17 @@ def render_sidebar() -> None:
             ):
                 select_conversation(conversation)
 
-        if shown == 0:
+        if not visible_conversations:
             st.caption("没有匹配的会话")
+        elif len(conversations) > 14 and not search:
+            if st.button(
+                "收起会话" if show_all else f"查看全部 {len(conversations)} 条",
+                key="toggle_conversations",
+                use_container_width=True,
+                disabled=streaming,
+            ):
+                st.session_state.show_all_conversations = not show_all
+                st.rerun()
 
         if st.button(
             "🗑 删除当前对话",
@@ -1428,7 +1542,18 @@ def render_sidebar() -> None:
             st.session_state.kb_widget = ""
             st.caption("还没有知识库，请先在下方创建")
 
-        with st.expander("管理知识库", expanded=False):
+        cached_files = st.session_state.kb_files.get(selected_kb, []) or []
+        cached_statuses = [str(item.get("status") or "").lower() for item in cached_files]
+        processing_count = cached_statuses.count("processing")
+        failed_count = cached_statuses.count("failed")
+        if failed_count:
+            kb_expander_label = f"管理知识库 · {failed_count} 个失败"
+        elif processing_count:
+            kb_expander_label = f"管理知识库 · 索引中 {processing_count}/{len(cached_files)}"
+        else:
+            kb_expander_label = "管理知识库"
+
+        with st.expander(kb_expander_label, expanded=False):
             new_kb = st.text_input(
                 "新知识库名称",
                 placeholder="新知识库名称",
@@ -1497,23 +1622,35 @@ def render_sidebar() -> None:
                                 st.caption(
                                     f"处理失败：{html.escape(str(file.get('error') or '未知错误'))[:80]}"
                                 )
+                        file_hash = str(file.get("file_hash") or "")
                         with action_col:
-                            if st.button(
+                            with st.popover(
                                 "🗑",
-                                key=f"del_file_{selected_kb}_{index}",
                                 help="删除文件",
+                                key=f"file_menu_{selected_kb}_{file_hash}",
                             ):
-                                try:
-                                    api(
-                                        "DELETE",
-                                        f"/knowledge-bases/{selected_kb}/documents/{file['file_hash']}",
-                                        params={"user_id": USER_ID},
-                                        timeout=15,
-                                    )
-                                    st.session_state.kb_files.pop(selected_kb, None)
-                                    st.rerun()
-                                except Exception as exc:
-                                    st.error(f"删除失败：{exc}")
+                                st.caption(
+                                    f"确认删除 {str(file.get('file_name', ''))[:32]}？"
+                                    "删除后不可恢复。"
+                                )
+                                if st.button(
+                                    "删除文件",
+                                    key=f"del_file_{selected_kb}_{file_hash}",
+                                    type="primary",
+                                    use_container_width=True,
+                                ):
+                                    try:
+                                        api(
+                                            "DELETE",
+                                            f"/knowledge-bases/{selected_kb}/documents/{file['file_hash']}",
+                                            params={"user_id": USER_ID},
+                                            timeout=15,
+                                        )
+                                        st.session_state.kb_files.pop(selected_kb, None)
+                                        cache_kb_files(selected_kb)
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(f"删除失败：{exc}")
                 else:
                     st.caption("暂无文件")
 
@@ -1548,6 +1685,7 @@ def render_sidebar() -> None:
                             )
                             response.raise_for_status()
                             st.session_state.kb_files.pop(selected_kb, None)
+                            cache_kb_files(selected_kb)
                             st.success("已上传，后台处理中")
                             st.rerun()
                         except Exception as exc:
@@ -1634,13 +1772,10 @@ with chat_col:
                     render_message(
                         message["role"],
                         message["content"],
-                        message.get("sources"),
-                        message.get("timestamp", ""),
-                        sources_from_previous_turn=message.get(
-                            "sources_from_previous_turn", False
-                        ),
+                        timestamp=message.get("timestamp", ""),
                         anchor_key=f"m{index}",
                         trace=message.get("trace"),
+                        show_sources=False,
                     ),
                     unsafe_allow_html=True,
                 )
@@ -1649,6 +1784,15 @@ with chat_col:
                     index,
                     index == len(st.session_state.messages) - 1,
                 )
+                if message.get("sources"):
+                    st.markdown(
+                        render_sources_html(
+                            message.get("sources"),
+                            f"m{index}",
+                            message.get("sources_from_previous_turn", False),
+                        ),
+                        unsafe_allow_html=True,
+                    )
             if st.session_state.get("active_stream"):
                 render_live_stream()
     render_composer()
