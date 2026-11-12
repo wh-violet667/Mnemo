@@ -130,7 +130,7 @@ flowchart LR
 1. Streamlit 以逐行 JSON 读取 `/chat_with_agent/stream`，事件类型为 `status` / `answer` / `trace` / `sources` / `error`。
 2. FastAPI 调用 LangGraph Agent，工具按需检索知识库和长期记忆。
 3. `search_knowledge_base` 根据 `retrieval_mode` 执行一次 fast 检索，或 1-2 轮 Plan/Retrieve/Critique/Refine；检索在 Milvus 做子块召回，回 PostgreSQL 取父块原文，再统一 rerank。
-4. `trace` 事件记录模式、轮次、证据数和耗时；回答里的 `[n]` 与 `sources` 事件对应，前端渲染来源卡片。
+4. `trace` 事件记录模式、轮次、证据数、记忆使用和耗时；回答里的 `[n]` 与 `sources` 事件对应，前端渲染来源卡片。来源卡片带支持该 claim 的 `quote` 和段落定位 `locator`，不是父块开头的截断。
 5. 对话通过 BackgroundTask 写入 PostgreSQL；每 180 秒的后台任务负责压缩和提取记忆。
 
 **数据层分工**

@@ -169,12 +169,19 @@ async def fetch_answer(
             elif event_type == "sources":
                 sources = content if isinstance(content, list) else []
             elif event_type == "trace":
-                trace = content if isinstance(content, dict) else {}
+                if isinstance(content, dict):
+                    trace = {**trace, **content}
             elif event_type == "status":
                 statuses.append(str(content or ""))
             elif event_type == "error":
                 errors.append(str(content or ""))
 
+    memory_count = trace.get("memory_count")
+    memory_used = (
+        int(memory_count) > 0
+        if isinstance(memory_count, (int, float))
+        else any("记忆" in status for status in statuses)
+    )
     return {
         "answer": "".join(answer_parts).strip(),
         "sources": sources,
@@ -183,7 +190,7 @@ async def fetch_answer(
         "errors": errors,
         "latency_ms": (time.perf_counter() - started) * 1000,
         "first_token_ms": first_token_ms,
-        "memory_used": any("记忆" in status for status in statuses),
+        "memory_used": memory_used,
     }
 
 

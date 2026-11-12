@@ -105,12 +105,22 @@ async def get_memory(
         episodic_k=episodic_k,
         procedural_k=procedural_k,
     )
-    count = 1
-    for memory in memories_dict.values():
-        if isinstance(memory, list):
-            count += len(memory)
-        
-    writer(f"🔍 检索到{count}条记忆，耗时{time.time() - start_time:.2f}秒")
+    memory_types = {
+        key: len(value)
+        for key, value in memories_dict.items()
+        if isinstance(value, list)
+    }
+    memory_count = sum(memory_types.values())
+    writer(f"🔍 检索到{memory_count}条记忆，耗时{time.time() - start_time:.2f}秒")
+    writer(
+        {
+            "type": "trace",
+            "content": {
+                "memory_count": memory_count,
+                "memory_types": memory_types,
+            },
+        }
+    )
     now = int(time.time())
     memories_text = config.MEMORY_USAGE_PROMPT.format(
         memories_dict=memories_dict,
@@ -159,6 +169,17 @@ async def search_knowledge_base(
     )
 
     if result.sources:
+        # Keep full parent text only inside the request context; the wire
+        # payload gets a claim-aligned quote, never the full body.
+        by_parent = {
+            str(doc.get("parent_id")): str(doc.get("text") or "")
+            for doc in result.documents
+            if doc.get("parent_id")
+        }
+        for source in result.sources:
+            parent_id = str(source.get("parent_id") or "")
+            if parent_id and parent_id in by_parent:
+                runtime.context.source_texts[parent_id] = by_parent[parent_id]
         runtime.context.sources.extend(result.sources)
 
     # trace 与 status 分开发送；trace 始终下发，便于排查未命中与升级行为

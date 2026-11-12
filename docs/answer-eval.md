@@ -25,7 +25,7 @@
 | `retrieved_context_ids` | 父块 ID |
 | `reference` | 参考答案 |
 | `reference_context_ids` | `expected_files` 或 `expected_parent_ids` |
-| `cited_sources` | 回答中实际引用到的来源及全文 |
+| `cited_sources` | 回答中实际引用到的来源（含 `quote` / `locator`；全文按 `parent_id` 从 PostgreSQL 读取） |
 | `trace` | 检索 trace（模式、轮次、查询、耗时） |
 | `judge_a` | 正确性 judge 输出 |
 | `judge_b` | 忠实度/引用 judge 输出 |

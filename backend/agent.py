@@ -12,6 +12,7 @@ from langgraph.types import Overwrite
 import config
 from typing import AsyncGenerator
 from tools import search_knowledge_base, get_memory, get_raw_conversation_by_summary_id
+from citations import enrich_sources_with_quotes
 import json
 from schemas import ContextSchema
 from conversations import make_thread_id
@@ -311,14 +312,24 @@ async def stream_agent_response(
         # 循环结束后，合并所有ai回复部分
         ai_message = "".join(ai_message_parts)
 
+        # Attach a deterministic supporting quote/locator to every source.
+        # Full parent text stays in context.source_texts and never leaves the
+        # process; only the supporting quote is sent to the client.
+        enriched_sources = enrich_sources_with_quotes(
+            ai_message,
+            context.sources,
+            getattr(context, "source_texts", {}),
+            fallback_claim=user_message,
+        )
+
         # 只把回答里真正引用到的来源下发给前端，避免把 top-k 无关文档全塞给用户
         sources_to_send = []
-        if context.sources:
+        if enriched_sources:
             cited = {int(index) for index in re.findall(r"\[(\d+)\]", ai_message)}
             sources_to_send = (
-                [source for source in context.sources if source["index"] in cited]
+                [source for source in enriched_sources if source["index"] in cited]
                 if cited
-                else context.sources
+                else enriched_sources
             )
             if sources_to_send:
                 yield json.dumps(

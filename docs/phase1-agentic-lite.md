@@ -423,7 +423,8 @@ GET /chat_with_agent/stream
 兼容性：
 
 - 旧前端忽略 `trace` 也能正常工作；
-- 旧后端不返回 `trace` 时，新前端不显示执行摘要。
+- 旧后端不返回 `trace` 时，新前端不显示执行摘要；
+- `trace` 可能由 `search_knowledge_base` 和 `get_memory` 分别发出；前端按字段合并，`memory_count` 与检索字段互不覆盖。
 
 ### 5.3 `RetrievalResult`
 

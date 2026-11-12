@@ -250,6 +250,10 @@ CSS = """
     color: #9e4c32; display: grid; place-items: center; flex: 0 0 auto; font-size: .6rem;
   }
   .source-name { font-size: .74rem; font-weight: 700; color: var(--ink); }
+  .source-locator {
+    margin-left: 5px; font-size: .58rem; font-weight: 400; color: var(--muted);
+    background: #f4eee5; border-radius: 4px; padding: 1px 4px; white-space: nowrap;
+  }
   .source-meta { font-size: .68rem; color: var(--muted); margin-top: 1px; }
   .source-toggle {
     margin-left: auto; color: var(--accent-dark); font-size: .68rem; white-space: nowrap;
@@ -919,8 +923,16 @@ def render_sources_html(
         icon = {"pdf": "PDF", "docx": "DOC", "doc": "DOC", "txt": "TXT"}.get(
             extension, "FILE"
         )
-        snippet = html.escape(str(source.get("snippet", "")))
-        preview = snippet[:90].rstrip() + ("…" if len(snippet) > 90 else "")
+        quote = str(source.get("quote") or source.get("snippet") or "").strip()
+        snippet = str(source.get("snippet") or "").strip()
+        body_text = quote or snippet
+        preview = body_text[:90].rstrip() + ("…" if len(body_text) > 90 else "")
+        locator = str(source.get("locator") or "").strip()
+        locator_html = (
+            f"<span class='source-locator'>{html.escape(locator)}</span>"
+            if locator
+            else ""
+        )
         score = source.get("score")
         meta = _relevance_label(score)
         score_title = (
@@ -932,13 +944,13 @@ def render_sources_html(
             "<summary class='source-summary'>"
             f"<div class='file-icon'>{icon}</div>"
             "<div class='source-head'>"
-            f"<div class='source-name'>[{index}] {file_name}</div>"
+            f"<div class='source-name'>[{index}] {file_name}{locator_html}</div>"
             f"<div class='source-meta'{score_title}>{meta}</div>"
-            f"<div class='source-preview'>{preview}</div>"
+            f"<div class='source-preview'>{html.escape(preview)}</div>"
             "</div>"
             "<span class='source-toggle'></span>"
             "</summary>"
-            f"<div class='source-snippet'>{snippet}</div>"
+            f"<div class='source-snippet'>{html.escape(body_text)}</div>"
             "</details>"
         )
     return source_html
@@ -1003,6 +1015,9 @@ def render_message(
             parts.append("无结果已升级深入")
         if trace.get("degraded"):
             parts.append("Agentic 关闭已降级")
+        memory_count = trace.get("memory_count")
+        if isinstance(memory_count, int) and memory_count > 0:
+            parts.append(f"使用 {memory_count} 条记忆")
         trace_html = f"<div class='source-note'>{' · '.join(parts)}</div>"
 
     source_html = (

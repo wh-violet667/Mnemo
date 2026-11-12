@@ -120,4 +120,7 @@ class ContextSchema:
     # 本次请求检索到的来源，供流式结束时下发给前端做引用展示。
     # 用可变 list 是有意的：工具里直接 append，请求结束后读取。
     sources: List[Dict[str, Any]] = field(default_factory=list)
+    # 内部全文映射 parent_id -> 原文，仅用于生成 claim 对齐的 quote；
+    # 不下发、不落库，流式结束时由 citations.enrich_sources_with_quotes 使用。
+    source_texts: Dict[str, str] = field(default_factory=dict)
 

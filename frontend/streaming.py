@@ -107,7 +107,9 @@ class StreamSession:
                         if not self.answer:
                             self.status = str(content)
                 elif event_type == "trace":
-                    self._set(trace=content if isinstance(content, dict) else None)
+                    if isinstance(content, dict):
+                        with self.lock:
+                            self.trace = {**(self.trace or {}), **content}
                 elif event_type == "answer":
                     with self.lock:
                         self.answer += str(content)
