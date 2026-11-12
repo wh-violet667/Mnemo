@@ -29,8 +29,12 @@ PLACEHOLDER_MARKERS = ("your_", "your-", "<", "changeme", "xxxx")
 def validate_env() -> None:
     """检查必填变量；缺失或仍是示例占位值时直接给出中文提示。"""
 
+    required = list(REQUIRED_ENV)
+    if "opencode.ai" in (os.getenv("BASE_URL") or "").lower():
+        required.append("OPENCODE_API_KEY")
+
     missing = []
-    for key in REQUIRED_ENV:
+    for key in required:
         value = (os.getenv(key) or "").strip().lower()
         if not value or any(marker in value for marker in PLACEHOLDER_MARKERS):
             missing.append(key)
@@ -39,5 +43,5 @@ def validate_env() -> None:
         raise RuntimeError(
             "缺少环境变量："
             + ", ".join(missing)
-            + "\n请复制 .env.example 为 .env，填写 DashScope、Milvus、PostgreSQL、Redis 配置后重试。"
+            + "\n请复制 .env.example 为 .env，填写 OpenCode Go、DashScope、Milvus、PostgreSQL、Redis 配置后重试。"
         )

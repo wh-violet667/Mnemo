@@ -72,7 +72,7 @@ docker compose ps
 copy .env.docker.example .env
 ```
 
-然后填 `DASHSCOPE_API_KEY`、`Milvus_url`、`Token`。
+然后填 `OPENCODE_API_KEY`、`DASHSCOPE_API_KEY`（embedding / rerank）、`Milvus_url`、`Token`。
 
 ## 5. 启动项目
 

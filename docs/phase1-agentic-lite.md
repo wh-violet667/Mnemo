@@ -68,8 +68,8 @@ search_knowledge_base(query)
 
 ### 2.3 模型分工
 
-- 最终回答：`AGENT_BASE_MODEL`（当前 qwen-plus）；
-- planner / critic：`SUMMARIZATION_MODEL`（当前 qwen-turbo，成本更低；JSON 不稳定时可升级 qwen-plus）；
+- 最终回答：`AGENT_BASE_MODEL`（当前 deepseek-v4.1-flash，OpenCode Go）；
+- planner / critic：`SUMMARIZATION_MODEL`（当前 deepseek-v4.1-flash，关闭 reasoning 以降低延迟）；
 - 不让主模型同时承担 planner、critic、generator 三次调用；
 - deep 模式预算：1 次 planner + 每轮 1 次 critic + 1 次生成。
 

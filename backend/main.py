@@ -34,8 +34,9 @@ async def check_and_store_memory():
     summarize_model_name = os.getenv("SUMMARIZATION_MODEL", "qwen-turbo")
     summarize_model = ChatOpenAI(
         model=summarize_model_name,
-        openai_api_key=os.getenv("DASHSCOPE_API_KEY"),
-        openai_api_base=os.getenv("BASE_URL"),
+        openai_api_key=config.llm_api_key(),
+        openai_api_base=config.llm_base_url(),
+        default_headers=config.llm_default_headers(),
         temperature=0.6,
         extra_body=config.chat_model_extra_body(summarize_model_name),
     )

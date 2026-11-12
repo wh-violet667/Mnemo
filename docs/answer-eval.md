@@ -169,7 +169,7 @@ question + answer + 引用来源 [n] + 全部检索上下文 C1...C5
 
 ## 5. 运行方式
 
-先启动后端，并确保 `.env` 中有 `DASHSCOPE_API_KEY`、`BASE_URL`、`AGENT_BASE_MODEL`。
+先启动后端，并确保 `.env` 中有 `OPENCODE_API_KEY`、`BASE_URL`、`AGENT_BASE_MODEL`。答案 judge 默认仍走 DashScope `qwen-plus`，使用 `JUDGE_BASE_URL` / `JUDGE_API_KEY` / `JUDGE_MODEL` 配置。
 
 ```bash
 # 3 条 pilot
@@ -235,6 +235,8 @@ evals/results/answer_violet_<run_id>_meta.json      # 运行身份（KB 指纹 +
 
 ## 7. 当前结果
 
+> 本节是切换 OpenCode Go 前的 `qwen-plus` 历史基线；当前生成模型为 `deepseek-v4.1-flash`，需要重跑后再做模型间对比。
+
 本次运行（2026-11，`violet-kb` / `fast` / `top_k=5`）共 56 条：46 可回答 + 10 不可回答。
 
 | 指标 | 结果 |
@@ -256,5 +258,5 @@ evals/results/answer_violet_<run_id>_meta.json      # 运行身份（KB 指纹 +
 - 检索上下文按 trace 查询重建，会多一次检索调用；`Hit@5` / `ExpectedContextCoverage` 与主回答调用的实际 top5 可能不完全一致，官方检索指标仍以 `run_eval.py` 为准；
 - `hit=0` 不代表一定检索失败：答案可能由其他文档或参数知识支持，需结合 cited sources 和 expected_files 人工复核；
 - violet 标签是文档级，`ExpectedContextCoverage` 仍是文档级；
-- Judge 与生成模型默认同为 `qwen-plus`，存在自偏好风险，建议人工抽检并用 `--judge-model` 做交叉验证；
+- Judge 默认 `qwen-plus`（DashScope），生成模型为 `deepseek-v4.1-flash`（OpenCode Go），两者不同源；仍需人工抽检并用 `--judge-model` 做交叉验证；
 - 56 条样本的 95% 置信区间约 ±10pp，分题型样本更小，报告应同时给出数量。

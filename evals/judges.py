@@ -109,6 +109,8 @@ def build_judge(
     base_url: str,
     api_key: str,
     temperature: float = 0.0,
+    default_headers: Optional[dict] = None,
+    extra_body: Optional[dict] = None,
 ) -> tuple[ChatOpenAI, ChatOpenAI]:
     """Return a JSON-mode judge and a plain fallback judge."""
 
@@ -119,6 +121,8 @@ def build_judge(
         "temperature": temperature,
         "timeout": 60.0,
         "max_retries": 1,
+        "default_headers": default_headers or {},
+        "extra_body": extra_body or {},
     }
     primary = ChatOpenAI(
         **common,

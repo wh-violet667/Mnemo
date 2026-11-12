@@ -1,11 +1,54 @@
 import os
 
 
+def is_opencode_go() -> bool:
+    """Whether the configured LLM base URL is OpenCode Go."""
+    return "opencode.ai" in (os.getenv("BASE_URL") or "").lower()
+
+
+def llm_api_key() -> str:
+    """API key for the chat model; OpenCode Go uses its own key."""
+    key = (os.getenv("OPENCODE_API_KEY") or "").strip()
+    if key:
+        return key
+    if is_opencode_go():
+        raise RuntimeError(
+            "BASE_URL 指向 OpenCode Go，但缺少 OPENCODE_API_KEY。"
+            "请在 .env 中填写 OpenCode Go API Key。"
+        )
+    return (os.getenv("DASHSCOPE_API_KEY") or "").strip()
+
+
+def llm_base_url() -> str:
+    return (os.getenv("BASE_URL") or "").strip()
+
+
+def llm_default_headers() -> dict:
+    """OpenCode Go requires a stable session ID for routing."""
+    if not is_opencode_go():
+        return {}
+    return {
+        "x-opencode-session": os.getenv(
+            "OPENCODE_SESSION_ID", "ses_mnemo_local_000000000000"
+        ),
+        "User-Agent": os.getenv("OPENCODE_USER_AGENT", "mnemo/0.1"),
+    }
+
+
 def chat_model_extra_body(model_name: str) -> dict:
     """Provider-specific switches that must not leak to other models."""
+    if is_opencode_go():
+        # DeepSeek V4.1 Flash supports reasoning_effort. Keep the streaming UI
+        # responsive by disabling hidden reasoning unless explicitly overridden.
+        if "deepseek" in (model_name or "").lower():
+            return {
+                "reasoning_effort": os.getenv(
+                    "OPENCODE_REASONING_EFFORT", "none"
+                )
+            }
+        return {}
     if "deepseek" in (model_name or "").lower():
-        # Keep the agent responsive and avoid spending output tokens on
-        # reasoning that the streaming UI does not display.
+        # Legacy DashScope DeepSeek switch.
         return {"enable_thinking": False}
     return {}
 

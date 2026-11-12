@@ -140,4 +140,4 @@ python evals/answer_eval.py --no-judge --limit 10
 
 - 上下文按 trace 查询重建，会多一次检索调用；`Hit@5` 仅作答案评测诊断，官方检索指标以 `run_eval.py` 为准；
 - 文档级标签仍未升级为父块级；
-- judge 与生成模型默认同为 `qwen-plus`，需要人工抽检和 `--judge-model` 交叉验证。
+- judge 默认 `qwen-plus`（DashScope），生成模型为 `deepseek-v4.1-flash`（OpenCode Go）；仍需人工抽检和 `--judge-model` 交叉验证。

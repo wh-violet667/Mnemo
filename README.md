@@ -66,6 +66,8 @@ Mnemo 围绕这两点做了四件事：
 
 3 条失败样本：`v-q007`、`v-q008` 误拒，`v-q033` 把“外传在剧场版之前”答成“无直接先后顺序”。完整指标和低分样本见 [`docs/answer-eval-report.md`](docs/answer-eval-report.md)，12 条人工抽检表见 [`docs/answer-eval-human-review.csv`](docs/answer-eval-human-review.csv)（待人工填写）。
 
+> 上表是切换 OpenCode Go 前的 `qwen-plus` 历史基线；当前生成模型为 `deepseek-v4.1-flash`，需要重跑答案评测后再对比。
+
 每次检索/答案评测还会写 `_meta.json`：KB 文件指纹 + 代码版本 + chunk 配置 + 模型名 + `top_k`。同一 `--run-id` 续跑时，身份不一致会直接拒绝，避免把两次不同实验拼成一个 run。
 
 复现方式见 [检索评测](#检索评测) 和 [答案评测](#答案评测)。
@@ -93,7 +95,8 @@ flowchart LR
         RD[("⚡ Redis<br/>checkpoint · 画像缓存")]
     end
 
-    EXT["☁️ DashScope<br/>DeepSeek V4.1 Flash · embedding · rerank"]
+    LLM["☁️ OpenCode Go<br/>DeepSeek V4.1 Flash"]
+    EXT["☁️ DashScope<br/>embedding · rerank"]
     BG["⏱️ 180s 记忆任务"]
 
     UI -->|"HTTP / 逐行 JSON"| API
@@ -111,7 +114,7 @@ flowchart LR
 
     T1 -->|"embedding / rerank"| EXT
     T2 -->|"embedding"| EXT
-    AGENT -->|"生成"| EXT
+    AGENT -->|"生成"| LLM
     BG -->|"Postgres 单事务"| PG
     BG -.->|"Milvus 投影"| MV
 
@@ -122,7 +125,7 @@ flowchart LR
     class UI client
     class API,AGENT,T1,T2,T3 app
     class PG,MV,RD data
-    class EXT,BG ext
+    class LLM,EXT,BG ext
 ```
 
 **一次对话的链路**
@@ -140,7 +143,8 @@ flowchart LR
 | PostgreSQL | 记忆事实源（memories / memory_versions / memory_sources / summaries）、用户、知识库、文件、父块、原始对话、会话 |
 | Milvus | 知识库子块向量、BM25 稀疏向量、记忆检索投影（可由 PostgreSQL 重建） |
 | Redis | LangGraph checkpoint、用户画像缓存 |
-| DashScope | 对话模型、embedding、rerank |
+| OpenCode Go | 对话模型（DeepSeek V4.1 Flash） |
+| DashScope | embedding、rerank |
 
 ## 关键设计
 
@@ -240,7 +244,8 @@ cd Mnemo
 
 - Python 3.12+
 - Docker（用于 PostgreSQL 16 和 Redis Stack）
-- DashScope API Key（对话、embedding、rerank）
+- OpenCode Go API Key（对话模型 DeepSeek V4.1 Flash）
+- DashScope API Key（embedding、rerank）
 - Milvus：推荐 Zilliz Cloud 免费集群；也可以自建 Milvus
 
 > Redis 必须是 **Redis Stack**，普通 Redis 没有 RedisJSON/RediSearch，LangGraph checkpointer 无法正常工作。
@@ -288,11 +293,18 @@ cp .env.docker.example .env
 至少填写：
 
 ```env
-DASHSCOPE_API_KEY=sk-...
+# 对话模型：OpenCode Go
+OPENCODE_API_KEY=sk-...
+BASE_URL=https://opencode.ai/inference/go/openai/v1
+OPENCODE_SESSION_ID=ses_mnemo_local_000000000000
+OPENCODE_REASONING_EFFORT=none
 AGENT_BASE_MODEL=deepseek-v4.1-flash
 AGENT_TOP_K=5
 AGENT_TEMPERATURE=0.7
 SUMMARIZATION_MODEL=deepseek-v4.1-flash
+
+# embedding / rerank：DashScope
+DASHSCOPE_API_KEY=sk-...
 EMBEDDING_MODEL=text-embedding-v4
 RERANK_MODEL=qwen3.7-text-rerank
 Milvus_url=https://in03-xxxx.serverless.ali-cn-hangzhou.cloud.zilliz.com.cn
@@ -308,7 +320,7 @@ AGENTIC_MAX_QUERIES=3
 
 `Token` 是 Zilliz API Key，或 `用户名:密码`。本地无认证 Milvus 可以留空。
 
-`SUMMARIZATION_MODEL` 只用于后台记忆抽取；当前与主模型同为 DeepSeek V4.1 Flash，关闭思考模式以降低延迟。
+`SUMMARIZATION_MODEL` 只用于后台记忆抽取；当前与主模型同为 DeepSeek V4.1 Flash，通过 OpenCode Go 的 `reasoning_effort=none` 降低延迟。
 
 ### 4. 启动后端
 
@@ -422,7 +434,7 @@ python evals/answer_eval.py --no-judge --limit 10
 python -m pytest -q
 ```
 
-当前 70 个测试（含参数化），覆盖：
+当前 84 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
 - Recall@k / MRR / 分位数
@@ -485,7 +497,7 @@ Mnemo/
 │   ├── judges.py                # Judge A/B 提示词与解析
 │   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
-├── tests/                       # pytest（70 个测试）
+├── tests/                       # pytest（84 个测试）
 ├── scripts/                     # WSL/Docker 安装、Agentic 冒烟
 │   ├── 01-enable-wsl.*
 │   ├── 02-install-docker.ps1
@@ -500,12 +512,12 @@ Mnemo/
 - **单用户演示**：`MNEMO_USER_ID` 默认 1，没有登录和租户隔离，不能直接公开部署。
 - **评测集依赖本地语料**：50 条问题对应 12 份 DOCX，默认放在 `data/violet-evergarden-kb/`（不提交），可用 `--corpus-dir` / `VIOLET_KB_DIR` 指定；标签是文档级，MRR/Recall 偏乐观。
 - **Agentic 未显示质量增益**：在 violet 50 条上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 4-5 倍；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
-- **答案评测依赖 LLM judge**：Judge A/B 默认同为 `qwen-plus`，存在自偏好风险；`human_review.csv` 提供 12 条分层样本，正式结论前需要人工抽检或用 `--judge-model` 交叉验证。
+- **答案评测依赖 LLM judge**：Judge A/B 默认 `qwen-plus`（DashScope），生成模型为 `deepseek-v4.1-flash`（OpenCode Go），两者不同源；`human_review.csv` 提供 12 条分层样本，正式结论前仍需人工抽检。
 - **路由仍有误判**：`auto` 在 violet 50 条中有 2 条单跳问题被路由到 deep；需要更多路由测试集再调规则。
 - **没有 CI**：目前依靠本地 pytest 和手动评测，没有 GitHub Actions 门禁。
 - **前端仍以单文件为主**：请求流已拆到 `frontend/streaming.py`，但 `frontend/app.py` 仍承担约 1660 行 UI/CSS/状态，后续应继续拆分组件与状态。
 - **rerank 有延迟成本**：`qwen3.7-text-rerank` 会增加一次远程重排调用，适合对排序质量敏感的场景。
-- **依赖外部服务**：DashScope 和 Zilliz 都是云服务，离线环境需要替换为本地模型/本地 Milvus。
+- **依赖外部服务**：OpenCode Go、DashScope 和 Zilliz 都是云服务，离线环境需要替换为本地模型/本地 Milvus。
 - **索引是最终一致**：PostgreSQL 事务提交后若 Milvus 投影失败，需要运行 `reindex_memories.py`；尚未实现自动 outbox worker。
 - **冲突策略仍是阈值式**：≥0.9 会把旧记忆标记为 superseded，尚未接入 LLM 判断 ADD / UPDATE / NOOP；相似但不同的事实可能被误替换。
 
@@ -514,7 +526,7 @@ Mnemo/
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 70 个测试
+- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 84 个测试
 - [x] 默认检索模式改为 `fast`，需要多轮时显式选择
 - [x] 答案评测：FactualCorrectness / Faithfulness / Citation / Refusal（violet 50 + 6 拒答）
 - [ ] 人工抽检 12–15 条并复核 Judge A/B

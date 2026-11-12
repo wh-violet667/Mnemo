@@ -843,11 +843,42 @@ async def run(args: argparse.Namespace) -> None:
 
     judge = None
     if not args.no_judge:
-        api_key = os.getenv("DASHSCOPE_API_KEY")
-        base_url = os.getenv("BASE_URL")
-        if not api_key or not base_url:
-            raise SystemExit("缺少 DASHSCOPE_API_KEY 或 BASE_URL，无法调用 judge")
-        judge = build_judge(args.judge_model, base_url, api_key)
+        judge_base_url = (
+            os.getenv("JUDGE_BASE_URL")
+            or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        judge_api_key = os.getenv("JUDGE_API_KEY")
+        if not judge_api_key:
+            judge_api_key = (
+                os.getenv("OPENCODE_API_KEY")
+                if "opencode.ai" in judge_base_url.lower()
+                else os.getenv("DASHSCOPE_API_KEY")
+            )
+        if not judge_api_key or not judge_base_url:
+            raise SystemExit(
+                "缺少 JUDGE_API_KEY / JUDGE_BASE_URL（或 DASHSCOPE_API_KEY）"
+            )
+        judge_headers = {}
+        judge_extra_body = {}
+        if "opencode.ai" in judge_base_url.lower():
+            judge_headers = {
+                "x-opencode-session": os.getenv(
+                    "OPENCODE_SESSION_ID", "ses_mnemo_eval_000000000000"
+                ),
+                "User-Agent": os.getenv("OPENCODE_USER_AGENT", "mnemo/0.1"),
+            }
+            judge_extra_body = {
+                "reasoning_effort": os.getenv(
+                    "OPENCODE_REASONING_EFFORT", "none"
+                )
+            }
+        judge = build_judge(
+            args.judge_model,
+            judge_base_url,
+            judge_api_key,
+            default_headers=judge_headers,
+            extra_body=judge_extra_body,
+        )
 
     if args.rejudge:
         if judge is None:
