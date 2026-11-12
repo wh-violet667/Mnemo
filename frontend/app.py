@@ -185,6 +185,17 @@ CSS = """
     background: #24211e; border: 1px solid #322e29; border-radius: 8px; margin-top: 6px;
   }
   section[data-testid="stSidebar"] summary { color: #d9d2c8 !important; font-size: .78rem; }
+  section[data-testid="stSidebar"] details summary,
+  section[data-testid="stSidebar"] details[open] summary {
+    background: #24211e !important; color: #d9d2c8 !important;
+    border-radius: 7px 7px 0 0;
+  }
+  section[data-testid="stSidebar"] details:not([open]) summary { border-radius: 7px; }
+  section[data-testid="stSidebar"] details summary:hover { background: #2c2824 !important; }
+  section[data-testid="stSidebar"] [data-testid="stAlert"] {
+    background: #3a3224 !important; border: 1px solid #5b4a2d !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stAlert"] * { color: #f0d7a6 !important; }
   section[data-testid="stSidebar"] [data-testid="stFileUploader"] {
     background: #26231f; border-radius: 8px; padding: 6px;
   }
@@ -200,6 +211,25 @@ CSS = """
     border-top: 1px solid var(--sidebar-line); margin-top: 12px; padding: 10px 4px 2px;
     font-size: .72rem; color: var(--sidebar-muted);
   }
+  /* Conversation labels must truncate, never wrap into a second line. */
+  section[data-testid="stSidebar"] [class*="st-key-conv_"] button,
+  section[data-testid="stSidebar"] [class*="st-key-conv_"] button * {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    min-width: 0 !important;
+  }
+  section[data-testid="stSidebar"] [class*="st-key-conv_"] button p {
+    display: block !important; width: 100% !important; margin: 0 !important;
+  }
+  /* A collapsed sidebar must not reserve its 300px width in the main layout. */
+  body:has(button[data-testid="stExpandSidebarButton"]) section[data-testid="stSidebar"] {
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    flex-basis: 0 !important;
+    overflow: hidden !important;
+  }
 
   /* ---------- main ---------- */
   .main-header {
@@ -213,10 +243,44 @@ CSS = """
   .pill {
     display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px;
     border: 1px solid #ddd4c7; background: #fffdf9; border-radius: 999px;
-    font-size: .72rem; color: #6c6459; white-space: nowrap;
+    font-size: .72rem; color: #6c6459; white-space: nowrap; cursor: default;
   }
   .pill.accent { color: var(--accent-dark); border-color: #e8c9bc; background: #fdf0ea; }
   .pill .mini { font-size: .72rem; opacity: .62; }
+  .header-detail { position: relative; display: inline-flex; }
+  .header-detail-summary {
+    display: inline-flex; align-items: center; cursor: pointer;
+    list-style: none; outline: none;
+  }
+  .header-detail-summary::-webkit-details-marker { display: none; }
+  .header-detail-summary:hover { background: #faf4eb; }
+  .header-detail[open] .header-detail-summary {
+    color: var(--accent-dark); border-color: #e8c9bc; background: #fdf0ea;
+  }
+  .header-detail-panel {
+    position: absolute; right: 0; top: calc(100% + 8px);
+    width: 292px; max-width: min(292px, calc(100vw - 32px));
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 11px; box-shadow: 0 14px 32px rgba(50, 35, 20, .18);
+    padding: 11px 12px 9px; z-index: 1000002;
+  }
+  .hd-title {
+    font-size: .78rem; font-weight: 700; color: var(--ink);
+    padding-bottom: 7px; margin-bottom: 7px; border-bottom: 1px solid #eee4d7;
+  }
+  .hd-row {
+    display: grid; grid-template-columns: 68px 1fr; gap: 8px;
+    align-items: baseline; padding: 2px 0; font-size: .7rem;
+  }
+  .hd-row span { color: var(--muted); }
+  .hd-row b {
+    color: var(--ink); font-weight: 600; text-align: right;
+    overflow-wrap: anywhere; line-height: 1.45;
+  }
+  .hd-foot {
+    margin-top: 7px; padding-top: 6px; border-top: 1px dashed #eee4d7;
+    color: var(--muted); font-size: .64rem;
+  }
 
   /* messages */
   .msg-row { display: flex; gap: 10px; margin: 0 0 18px; }
@@ -232,6 +296,7 @@ CSS = """
   .bubble {
     background: #e9dfd1; border-radius: 14px 14px 4px 14px;
     padding: 9px 13px; font-size: .88rem; line-height: 1.6; color: #2a2520;
+    white-space: pre-wrap; word-break: break-word;
   }
   .msg-name { font-size: .76rem; font-weight: 700; color: var(--ink); margin: 2px 0 5px; display: flex; align-items: center; gap: 8px; }
   .msg-status { font-size: .72rem; color: var(--muted); font-weight: 400; }
@@ -357,6 +422,77 @@ CSS = """
     flex: 0 0 calc(100vh - 380px) !important;
   }
 
+  /* Streamlit makes columns full-width below 640px. Keep the small control
+     rows horizontal so menus and message actions stay attached to their item. */
+  div[class*="st-key-conv_row_"] [data-testid="stHorizontalBlock"],
+  div[class*="st-key-mem_row_"] [data-testid="stHorizontalBlock"],
+  div[class*="st-key-file_row_"] [data-testid="stHorizontalBlock"],
+  div[class*="st-key-msg_actions_"] [data-testid="stHorizontalBlock"],
+  div[class*="st-key-delete_chat_confirm_"] [data-testid="stHorizontalBlock"] {
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: .35rem !important;
+  }
+  div[class*="st-key-conv_row_"] [data-testid="stColumn"],
+  div[class*="st-key-mem_row_"] [data-testid="stColumn"],
+  div[class*="st-key-file_row_"] [data-testid="stColumn"],
+  div[class*="st-key-msg_actions_"] [data-testid="stColumn"],
+  div[class*="st-key-delete_chat_confirm_"] [data-testid="stColumn"] {
+    min-width: 0 !important;
+    width: auto !important;
+  }
+  div[class*="st-key-conv_row_"] [data-testid="stColumn"]:first-child,
+  div[class*="st-key-mem_row_"] [data-testid="stColumn"]:first-child,
+  div[class*="st-key-file_row_"] [data-testid="stColumn"]:first-child {
+    flex: 1 1 auto !important;
+  }
+  div[class*="st-key-conv_row_"] [data-testid="stColumn"]:last-child,
+  div[class*="st-key-mem_row_"] [data-testid="stColumn"]:last-child,
+  div[class*="st-key-file_row_"] [data-testid="stColumn"]:last-child {
+    flex: 0 0 48px !important;
+    width: 48px !important;
+    max-width: 48px !important;
+  }
+  div[class*="st-key-msg_actions_"] [data-testid="stColumn"]:nth-child(1) {
+    flex: 0 0 64px !important; width: 64px !important; max-width: 64px !important;
+  }
+  div[class*="st-key-msg_actions_"] [data-testid="stColumn"]:nth-child(2) {
+    flex: 0 0 auto !important; width: auto !important;
+  }
+  div[class*="st-key-msg_actions_"] [data-testid="stColumn"]:nth-child(3) {
+    flex: 1 1 auto !important;
+  }
+  div[class*="st-key-delete_chat_confirm_"] [data-testid="stColumn"] {
+    flex: 1 1 0 !important;
+  }
+
+  @media (max-width: 640px) {
+    div.st-key-chat_scroll {
+      height: calc(100dvh - 415px) !important;
+    }
+    div[data-testid="stLayoutWrapper"]:has(> .st-key-chat_scroll) {
+      height: calc(100dvh - 415px) !important;
+      flex: 0 0 calc(100dvh - 415px) !important;
+    }
+    .hintline { margin-top: 1px; font-size: .64rem; }
+    section[data-testid="stSidebar"] {
+      width: 100vw !important;
+      min-width: 100vw !important;
+      max-width: 100vw !important;
+      box-shadow: 18px 0 42px rgba(20, 14, 8, .32);
+    }
+    div[class*="st-key-file_row_"] [data-testid="stMarkdownContainer"] {
+      min-width: 0 !important; overflow: hidden !important;
+    }
+    div[class*="st-key-file_row_"] [data-testid="stMarkdownContainer"] > div,
+    div[class*="st-key-file_row_"] [data-testid="stMarkdownContainer"] p {
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+  }
+
 
   /* memory */
   div.st-key-memory_panel {
@@ -445,7 +581,8 @@ CSS = """
 
   @media (min-width: 900px) {
     section[data-testid="stSidebar"] {
-      width: 300px !important; min-width: 280px !important; max-width: 320px !important;
+      width: 300px !important; min-width: 300px !important; max-width: 300px !important;
+      flex: 0 0 300px !important;
     }
   }
   @media (max-width: 1100px) {
@@ -520,10 +657,10 @@ DEFAULTS = {
     "memories": [],
     "memory_count": 0,
     "memory_error": "",
+    "runtime": {},
     "active_stream": None,
     "retrieval_mode": "fast",
     "history_loaded_for": None,
-    "confirm_delete_kb": False,
     "confirm_delete_chat": False,
     "show_all_conversations": False,
     "files_expanded": {},
@@ -572,6 +709,16 @@ def _relative_time(value: Any) -> str:
     if delta < 7 * 86400:
         return f"{delta // 86400} 天前"
     return datetime.fromtimestamp(stamp).strftime("%m-%d")
+
+
+def _copy_text(text: str) -> str:
+    """Strip the Markdown decoration that st.code would otherwise show raw."""
+    cleaned = str(text or "")
+    cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+    cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+    cleaned = re.sub(r"^#{1,6}\s*", "", cleaned, flags=re.M)
+    return cleaned.strip()
 
 
 def _importance_label(value: Any) -> str:
@@ -655,6 +802,7 @@ def fetch_messages(conversation_id: str) -> List[Dict[str, Any]]:
                 "role": "user" if item.get("role") == "human" else "assistant",
                 "content": item.get("content", ""),
                 "sources": item.get("sources") or [],
+                "trace": item.get("trace") or {},
                 "timestamp": timestamp,
             }
         )
@@ -678,6 +826,13 @@ def fetch_kbs() -> List[str]:
     return api(
         "GET", "/knowledge-bases", params={"user_id": USER_ID}, timeout=10
     ).get("knowledge_bases", [])
+
+
+def fetch_runtime() -> Dict[str, Any]:
+    try:
+        return api("GET", "/runtime", timeout=5)
+    except Exception:
+        return {}
 
 
 def fetch_files(kb_id: str) -> List[Dict[str, Any]]:
@@ -707,10 +862,15 @@ def pick_kb(kb_id: Optional[str]) -> str:
     return kbs[0] if kbs else ""
 
 
-def fetch_memories() -> List[Dict[str, Any]]:
-    return api(
+def fetch_memories_payload() -> tuple[List[Dict[str, Any]], int]:
+    data = api(
         "GET", "/memories", params={"user_id": USER_ID, "limit": 200}, timeout=15
-    ).get("memories", [])
+    )
+    memories = data.get("memories", [])
+    total = data.get("total")
+    if not isinstance(total, int):
+        total = len(memories)
+    return memories, total
 
 
 def bootstrap() -> None:
@@ -752,14 +912,16 @@ def bootstrap() -> None:
         st.session_state.history_loaded_for = current["conversation_id"]
 
         try:
-            memories = fetch_memories()
+            memories, memory_total = fetch_memories_payload()
             st.session_state.memories = memories
-            st.session_state.memory_count = len(memories)
+            st.session_state.memory_count = memory_total
             st.session_state.memory_error = ""
         except Exception as exc:
             st.session_state.memories = []
             st.session_state.memory_count = 0
             st.session_state.memory_error = str(exc)
+
+        st.session_state.runtime = fetch_runtime()
 
         st.session_state.bootstrapped = True
         st.session_state.boot_error = None
@@ -982,7 +1144,8 @@ def render_sources_html(
         )
         quote = str(source.get("quote") or source.get("snippet") or "").strip()
         snippet = str(source.get("snippet") or "").strip()
-        body_text = quote or snippet
+        # Old messages may only have a raw snippet with DOCX line breaks.
+        body_text = re.sub(r"\s+", " ", (quote or snippet)).strip()
         preview = body_text[:90].rstrip() + ("…" if len(body_text) > 90 else "")
         locator = str(source.get("locator") or "").strip()
         locator_html = (
@@ -1057,17 +1220,23 @@ def render_message(
     )
 
     trace_html = ""
-    if isinstance(trace, dict) and trace.get("mode"):
-        mode_label = {"fast": "快速", "deep": "深入", "auto": "自动"}.get(
-            str(trace.get("mode")), str(trace.get("mode"))
-        )
-        elapsed_s = (trace.get("elapsed_ms") or 0) / 1000
-        parts = [
-            f"本次：{mode_label}",
-            f"{trace.get('rounds', '?')} 轮",
-            f"{trace.get('parent_count', '?')} 条证据",
-            f"{elapsed_s:.1f}s",
-        ]
+    if isinstance(trace, dict):
+        parts = []
+        mode = trace.get("mode")
+        if mode:
+            mode_label = {"fast": "快速", "deep": "深入", "auto": "自动"}.get(
+                str(mode), str(mode)
+            )
+            parts.append(f"本次：{mode_label}")
+        if trace.get("rounds") is not None:
+            parts.append(f"{trace.get('rounds')} 轮")
+        if trace.get("parent_count") is not None:
+            parts.append(f"{trace.get('parent_count')} 条召回")
+        if trace.get("elapsed_ms") is not None:
+            try:
+                parts.append(f"{float(trace.get('elapsed_ms')) / 1000:.1f}s")
+            except (TypeError, ValueError):
+                pass
         if trace.get("escalated"):
             parts.append("无结果已升级深入")
         if trace.get("degraded"):
@@ -1075,7 +1244,8 @@ def render_message(
         memory_count = trace.get("memory_count")
         if isinstance(memory_count, int) and memory_count > 0:
             parts.append(f"使用 {memory_count} 条记忆")
-        trace_html = f"<div class='source-note'>{' · '.join(parts)}</div>"
+        if parts:
+            trace_html = f"<div class='source-note'>{' · '.join(parts)}</div>"
 
     source_html = (
         render_sources_html(sources, anchor_key, sources_from_previous_turn)
@@ -1111,8 +1281,8 @@ def render_welcome() -> None:
         unsafe_allow_html=True,
     )
     suggestions = [
-        "退款期限是多久？",
-        "总结一下差旅报销流程",
+        "《紫罗兰永恒花园》的制作公司是谁？",
+        "《紫罗兰永恒花园》原作小说一共有几卷？",
         "我之前说过什么偏好？",
     ]
     columns = st.columns(3)
@@ -1141,14 +1311,51 @@ def render_header() -> None:
         if st.session_state.memory_error
         else f"记忆 · {st.session_state.memory_count} 条"
     )
+    runtime = st.session_state.get("runtime") or {}
+    runtime_models = runtime.get("models") or {}
+    chunk_config = runtime.get("chunk_config") or {}
+    runtime_git = runtime.get("git") or {}
+    mode_label = {"fast": "快速", "auto": "自动", "deep": "深入"}.get(
+        str(st.session_state.get("retrieval_mode") or "fast"), "快速"
+    )
+    detail_rows = [
+        ("知识库", kb),
+        ("文件", f"{len(files)} 个"),
+        ("记忆", "离线" if st.session_state.memory_error else f"{st.session_state.memory_count} 条"),
+        ("检索模式", mode_label),
+        ("生成模型", html.escape(str(runtime_models.get("agent") or "—"))),
+        ("重排模型", html.escape(str(runtime_models.get("rerank") or "—"))),
+        ("向量模型", html.escape(str(runtime_models.get("embedding") or "—"))),
+        (
+            "分块",
+            f"{chunk_config.get('parent_size', '—')} / {chunk_config.get('child_size', '—')}",
+        ),
+    ]
+    detail_html = "".join(
+        f"<div class='hd-row'><span>{label}</span><b>{value}</b></div>"
+        for label, value in detail_rows
+    )
+    git_sha = str(runtime_git.get("sha") or "").strip()
+    git_note = ""
+    if git_sha:
+        git_note = (
+            f"<div class='hd-foot'>代码 {html.escape(git_sha)}"
+            f"{' · 有未提交改动' if runtime_git.get('dirty') else ''}</div>"
+        )
     st.markdown(
         "<div class='main-header'>"
         f"<div><h1>{title}</h1>"
         f"<div class='sub'><span class='dot' style='background:{dot_color}'></span>"
         f"{status_line}</div></div>"
         "<div class='pills'>"
-        f"<span class='pill accent'>{memory_status}</span>"
-        "<span class='pill' title='生成 qwen-plus · 重排 qwen3-rerank · 向量 text-embedding-v4'>详情</span>"
+        f"<span class='pill accent' title='记忆面板入口在左侧工作区'>{memory_status}</span>"
+        "<details class='header-detail'>"
+        "<summary class='pill header-detail-summary'>详情</summary>"
+        "<div class='header-detail-panel'>"
+        "<div class='hd-title'>运行时详情</div>"
+        f"{detail_html}"
+        f"{git_note}"
+        "</div></details>"
         "</div></div>",
         unsafe_allow_html=True,
     )
@@ -1297,7 +1504,7 @@ def render_message_actions(
         copy_col, action_col, _ = st.columns([1, 2, 7])
         with copy_col:
             with st.popover("复制", use_container_width=False, key=f"copy_{index}"):
-                st.code(message.get("content", ""), language=None)
+                st.code(_copy_text(message.get("content", "")), language=None)
         if is_last:
             with action_col:
                 if message.get("error") or message.get("stopped"):
@@ -1324,7 +1531,9 @@ def render_memory_panel() -> None:
             )
             with title_col:
                 count_label = (
-                    "离线" if st.session_state.memory_error else f"{len(st.session_state.memories)} 条"
+                    "离线"
+                    if st.session_state.memory_error
+                    else f"{st.session_state.memory_count} 条"
                 )
                 st.markdown(
                     "<div class='mem-head'><h3>记忆</h3>"
@@ -1334,9 +1543,9 @@ def render_memory_panel() -> None:
             with refresh_col:
                 if st.button("↻", key="refresh_memory", type="tertiary", help="刷新记忆"):
                     try:
-                        memories = fetch_memories()
+                        memories, memory_total = fetch_memories_payload()
                         st.session_state.memories = memories
-                        st.session_state.memory_count = len(memories)
+                        st.session_state.memory_count = memory_total
                         st.session_state.memory_error = ""
                         st.rerun()
                     except Exception as exc:
@@ -1435,55 +1644,79 @@ def render_memory_panel() -> None:
                         "<details class='mem-more'><summary>展开全文</summary>"
                         f"<div class='mem-content mem-full'>{content}</div></details>"
                     )
-                card_col, action_col = st.columns([9, 1], vertical_alignment="top")
-                with card_col:
-                    st.markdown(
-                        "<div class='mem-card'>"
-                        "<div class='mem-top'>"
-                        f"<span class='mem-type t-{css_class}' title='{type_help}'>{label}</span>"
-                        f"<span class='mem-score'{score_title}>{score}</span>"
-                        "</div>"
-                        f"<div class='mem-content'>{preview}</div>"
-                        f"{more_html}"
-                        f"<div class='mem-meta'>{meta_text}</div>"
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
                 memory_id = memory.get("id")
-                with action_col:
-                    with st.popover(
-                        "⋯", help="更多操作", key=f"mem_menu_{memory_id}"
-                    ):
-                        st.caption("删除后不再参与检索。")
-                        if st.button(
-                            "删除这条记忆",
-                            key=f"del_mem_{memory_id}",
-                            type="primary",
-                            use_container_width=True,
+                with st.container(key=f"mem_row_{memory_id}"):
+                    card_col, action_col = st.columns(
+                        [9, 1], vertical_alignment="top"
+                    )
+                    with card_col:
+                        st.markdown(
+                            "<div class='mem-card'>"
+                            "<div class='mem-top'>"
+                            f"<span class='mem-type t-{css_class}' title='{type_help}'>{label}</span>"
+                            f"<span class='mem-score'{score_title}>{score}</span>"
+                            "</div>"
+                            f"<div class='mem-content'>{preview}</div>"
+                            f"{more_html}"
+                            f"<div class='mem-meta'>{meta_text}</div>"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with action_col:
+                        with st.popover(
+                            "⋯", help="更多操作", key=f"mem_menu_{memory_id}"
                         ):
-                            try:
-                                api(
-                                    "DELETE",
-                                    f"/memories/{memory_id}",
-                                    params={"user_id": USER_ID},
-                                    timeout=10,
-                                )
-                                st.session_state.memories = [
-                                    item
-                                    for item in st.session_state.memories
-                                    if item.get("id") != memory_id
-                                ]
-                                st.session_state.memory_count = len(
-                                    st.session_state.memories
-                                )
-                                st.rerun()
-                            except Exception as exc:
-                                st.error(f"删除失败：{exc}")
+                            st.caption("删除后不再参与检索。")
+                            if st.button(
+                                "删除这条记忆",
+                                key=f"del_mem_{memory_id}",
+                                type="primary",
+                                use_container_width=True,
+                            ):
+                                try:
+                                    api(
+                                        "DELETE",
+                                        f"/memories/{memory_id}",
+                                        params={"user_id": USER_ID},
+                                        timeout=10,
+                                    )
+                                    st.session_state.memories = [
+                                        item
+                                        for item in st.session_state.memories
+                                        if item.get("id") != memory_id
+                                    ]
+                                    st.session_state.memory_count = max(
+                                        0,
+                                        int(st.session_state.memory_count or 0) - 1,
+                                    )
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(f"删除失败：{exc}")
 
         st.markdown(
             "<div class='mem-foot'>记忆是用户级数据，不随会话删除。</div>",
             unsafe_allow_html=True,
         )
+
+
+@st.fragment(run_every=4)
+def render_kb_processing_watch(kb_id: str) -> None:
+    """Poll a processing KB and rerun the app when it becomes ready."""
+    files = st.session_state.kb_files.get(kb_id) or []
+    if not any(
+        str(item.get("status") or "").lower() == "processing" for item in files
+    ):
+        return
+    st.caption("后台索引中，页面会自动刷新…")
+    try:
+        fresh = fetch_files(kb_id)
+    except Exception:
+        return
+    st.session_state.kb_files[kb_id] = fresh
+    if not any(
+        str(item.get("status") or "").lower() == "processing" for item in fresh
+    ):
+        st.rerun(scope="app")
 
 
 # ---------------------------------------------------------------- sidebar
@@ -1532,48 +1765,50 @@ def render_sidebar() -> None:
             conversation_id = conversation["conversation_id"]
             active = conversation_id == st.session_state.conversation_id
             full_title = conversation.get("title") or "新对话"
-            title = full_title if len(full_title) <= 13 else full_title[:13] + "…"
-            label = ("● " if active else "   ") + title
-            row_main, row_menu = st.columns([6, 1], vertical_alignment="center")
-            with row_main:
-                if st.button(
-                    label,
-                    key=f"conv_{conversation_id}",
-                    use_container_width=True,
-                    type="primary" if active else "secondary",
-                    help=full_title if len(full_title) > 13 else None,
-                    disabled=streaming,
-                ):
-                    select_conversation(conversation)
-            with row_menu:
-                with st.popover(
-                    "⋯",
-                    key=f"conv_menu_{conversation_id}",
-                    help="重命名会话",
-                ):
-                    new_title = st.text_input(
-                        "会话标题",
-                        value=full_title,
-                        key=f"rename_input_{conversation_id}",
-                        label_visibility="collapsed",
-                    )
+            label = ("● " if active else "") + full_title
+            with st.container(key=f"conv_row_{conversation_id}"):
+                row_main, row_menu = st.columns(
+                    [6, 1], vertical_alignment="center"
+                )
+                with row_main:
                     if st.button(
-                        "保存标题",
-                        key=f"rename_save_{conversation_id}",
-                        type="primary",
+                        label,
+                        key=f"conv_{conversation_id}",
                         use_container_width=True,
+                        type="primary" if active else "secondary",
+                        help=full_title,
+                        disabled=streaming,
                     ):
-                        try:
-                            api(
-                                "PATCH",
-                                f"/conversations/{conversation_id}",
-                                params={"user_id": USER_ID, "title": new_title},
-                                timeout=10,
-                            )
-                            refresh_conversations()
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(f"重命名失败：{exc}")
+                        select_conversation(conversation)
+                with row_menu:
+                    with st.popover(
+                        "⋯",
+                        key=f"conv_menu_{conversation_id}",
+                        help="重命名会话",
+                    ):
+                        new_title = st.text_input(
+                            "会话标题",
+                            value=full_title,
+                            key=f"rename_input_{conversation_id}",
+                            label_visibility="collapsed",
+                        )
+                        if st.button(
+                            "保存标题",
+                            key=f"rename_save_{conversation_id}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            try:
+                                api(
+                                    "PATCH",
+                                    f"/conversations/{conversation_id}",
+                                    params={"user_id": USER_ID, "title": new_title},
+                                    timeout=10,
+                                )
+                                refresh_conversations()
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"重命名失败：{exc}")
 
         if not visible_conversations:
             st.caption("没有匹配的会话")
@@ -1598,24 +1833,25 @@ def render_sidebar() -> None:
 
         if st.session_state.get("confirm_delete_chat"):
             st.warning("确认删除当前对话？此操作不可撤销。")
-            confirm_col, cancel_col = st.columns(2)
-            with confirm_col:
-                if st.button(
-                    "确认删除",
-                    key="delete_chat_confirm",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    st.session_state.confirm_delete_chat = False
-                    delete_current_conversation()
-            with cancel_col:
-                if st.button(
-                    "取消",
-                    key="delete_chat_cancel",
-                    use_container_width=True,
-                ):
-                    st.session_state.confirm_delete_chat = False
-                    st.rerun()
+            with st.container(key="delete_chat_confirm_row"):
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button(
+                        "确认删除",
+                        key="delete_chat_confirm",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        st.session_state.confirm_delete_chat = False
+                        delete_current_conversation()
+                with cancel_col:
+                    if st.button(
+                        "取消",
+                        key="delete_chat_cancel",
+                        use_container_width=True,
+                    ):
+                        st.session_state.confirm_delete_chat = False
+                        st.rerun()
 
         st.markdown("<div class='side-label'>知识库</div>", unsafe_allow_html=True)
         kbs = st.session_state.kbs
@@ -1719,58 +1955,69 @@ def render_sidebar() -> None:
                         )
                     visible_files = files if show_all_files else files[:12]
                     for index, file in enumerate(visible_files):
-                        file_col, action_col = st.columns([5, 1])
-                        status = str(file.get("status") or "")
-                        status_label = {
-                            "processing": "处理中",
-                            "failed": "失败",
-                            "ready": "就绪",
-                        }.get(status, status)
-                        status_html = ""
-                        if status and status != "ready":
-                            color = "#b45309" if status == "processing" else "#b91c1c"
-                            status_html = (
-                                f" <span style='color:{color};font-size:.64rem'>"
-                                f"[{html.escape(status_label)}]</span>"
-                            )
-                        with file_col:
-                            st.markdown(
-                                f"<div style='font-size:.72rem;color:#c5bbad;padding-top:5px'>📄 {html.escape(str(file.get('file_name', ''))[:22])}{status_html}</div>",
-                                unsafe_allow_html=True,
-                            )
-                            if status == "failed":
-                                st.caption(
-                                    f"处理失败：{html.escape(str(file.get('error') or '未知错误'))[:80]}"
-                                )
                         file_hash = str(file.get("file_hash") or "")
-                        with action_col:
-                            with st.popover(
-                                "🗑",
-                                help="删除文件",
-                                key=f"file_menu_{selected_kb}_{file_hash}",
-                            ):
-                                st.caption(
-                                    f"确认删除 {str(file.get('file_name', ''))[:32]}？"
-                                    "删除后不可恢复。"
+                        with st.container(key=f"file_row_{selected_kb}_{file_hash}"):
+                            file_col, action_col = st.columns([5, 1])
+                            status = str(file.get("status") or "")
+                            status_label = {
+                                "processing": "处理中",
+                                "failed": "失败",
+                                "ready": "就绪",
+                            }.get(status, status)
+                            status_html = ""
+                            if status and status != "ready":
+                                color = "#b45309" if status == "processing" else "#b91c1c"
+                                status_html = (
+                                    f" <span style='color:{color};font-size:.64rem'>"
+                                    f"[{html.escape(status_label)}]</span>"
                                 )
-                                if st.button(
-                                    "删除文件",
-                                    key=f"del_file_{selected_kb}_{file_hash}",
-                                    type="primary",
-                                    use_container_width=True,
+                            with file_col:
+                                st.markdown(
+                                    f"<div style='font-size:.72rem;color:#c5bbad;padding-top:5px'>📄 {html.escape(str(file.get('file_name', ''))[:22])}{status_html}</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                if status == "failed":
+                                    st.caption(
+                                        f"处理失败：{html.escape(str(file.get('error') or '未知错误'))[:80]}"
+                                    )
+                            with action_col:
+                                with st.popover(
+                                    "🗑",
+                                    help="删除文件",
+                                    key=f"file_menu_{selected_kb}_{file_hash}",
                                 ):
-                                    try:
-                                        api(
-                                            "DELETE",
-                                            f"/knowledge-bases/{selected_kb}/documents/{file['file_hash']}",
-                                            params={"user_id": USER_ID},
-                                            timeout=15,
-                                        )
-                                        st.session_state.kb_files.pop(selected_kb, None)
-                                        cache_kb_files(selected_kb)
-                                        st.rerun()
-                                    except Exception as exc:
-                                        st.error(f"删除失败：{exc}")
+                                    st.caption(
+                                        f"确认删除 {str(file.get('file_name', ''))[:32]}？"
+                                        "删除后不可恢复。"
+                                    )
+                                    if st.button(
+                                        "删除文件",
+                                        key=f"del_file_{selected_kb}_{file_hash}",
+                                        type="primary",
+                                        use_container_width=True,
+                                    ):
+                                        try:
+                                            api(
+                                                "DELETE",
+                                                f"/knowledge-bases/{selected_kb}/documents/{file['file_hash']}",
+                                                params={"user_id": USER_ID},
+                                                timeout=15,
+                                            )
+                                            st.session_state.kb_files.pop(selected_kb, None)
+                                            cache_kb_files(selected_kb)
+                                            st.rerun()
+                                        except Exception as exc:
+                                            st.error(f"删除失败：{exc}")
+                                            st.session_state.kb_files.pop(
+                                                selected_kb, None
+                                            )
+                                            cache_kb_files(selected_kb)
+                    processing = any(
+                        str(item.get("status") or "").lower() == "processing"
+                        for item in files
+                    )
+                    if processing:
+                        render_kb_processing_watch(selected_kb)
                 else:
                     st.caption("暂无文件")
 
@@ -1812,7 +2059,8 @@ def render_sidebar() -> None:
                             st.error(f"上传失败：{exc}")
 
                 confirm = st.checkbox(
-                    "确认删除当前知识库", key="confirm_delete_kb"
+                    "确认删除当前知识库",
+                    key=f"confirm_delete_kb_{selected_kb}",
                 )
                 if st.button(
                     "删除知识库",
@@ -1833,13 +2081,27 @@ def render_sidebar() -> None:
                         fallback_kb = remaining[0] if remaining else ""
                         st.session_state.selected_kb = fallback_kb
                         st.session_state.pending_kb = fallback_kb
-                        st.session_state.confirm_delete_kb = False
                         persist_knowledge_base(fallback_kb)
                         if fallback_kb:
                             cache_kb_files(fallback_kb)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"删除失败：{exc}")
+                        # PostgreSQL 与 Milvus 是两步删除；如果第一步已成功，
+                        # 重新拉取列表可以避免界面继续显示已删除的知识库。
+                        try:
+                            st.session_state.kbs = fetch_kbs()
+                            if selected_kb not in st.session_state.kbs:
+                                st.session_state.kb_files.pop(selected_kb, None)
+                                fallback = (
+                                    st.session_state.kbs[0]
+                                    if st.session_state.kbs
+                                    else ""
+                                )
+                                st.session_state.selected_kb = fallback
+                                st.session_state.pending_kb = fallback
+                        except Exception:
+                            pass
 
         st.markdown("<div class='side-label'>工作区</div>", unsafe_allow_html=True)
         if st.session_state.memory_error:

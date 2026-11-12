@@ -630,6 +630,10 @@ async def list_memories(
             memory_type=memory_type or None,
             limit=max(1, min(limit, 200)),
         )
+        total = await postgresql_client.count_memories(
+            user_id=user_id,
+            memory_type=memory_type or None,
+        )
     except Exception as e:
         logger.error(f"读取记忆失败: {e}")
         raise HTTPException(status_code=500, detail=f"读取记忆失败: {str(e)}")
@@ -637,6 +641,7 @@ async def list_memories(
     return MemoryListResponse(
         status="success",
         count=len(memories),
+        total=total,
         memories=[MemoryItem(**item) for item in memories],
     )
 

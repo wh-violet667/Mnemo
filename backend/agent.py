@@ -46,19 +46,23 @@ TTL_CONFIG = {
 }
 
 # 使用 OpenAI 兼容接口的方式更通用
+agent_model_name = os.getenv("AGENT_BASE_MODEL")
 model = ChatOpenAI(
-    model=os.getenv("AGENT_BASE_MODEL"),
+    model=agent_model_name,
     openai_api_key=os.getenv("DASHSCOPE_API_KEY"),
     openai_api_base=os.getenv("BASE_URL"),
     temperature=config.agent_temperature,
     streaming=True,
+    extra_body=config.chat_model_extra_body(agent_model_name or ""),
 )
 
+summarize_model_name = os.getenv("SUMMARIZATION_MODEL", "qwen-turbo")
 summarize_model = ChatOpenAI(
-    model=os.getenv("SUMMARIZATION_MODEL", "qwen-turbo"),
+    model=summarize_model_name,
     openai_api_key=os.getenv("DASHSCOPE_API_KEY"),
     openai_api_base=os.getenv("BASE_URL"),
     temperature=0.2,  # 总结模型温度，控制总结对话的随机性，0-1之间，0越确定，1越随机
+    extra_body=config.chat_model_extra_body(summarize_model_name),
 )
 
 """=============中间件============="""
@@ -252,6 +256,7 @@ async def stream_agent_response(
     # 组装AI回复
     ai_message = ""
     ai_message_parts = []
+    trace_payload: dict = {}
     thread_id = make_thread_id(user_id, conversation_id)
     try:
         if top_k is None:
@@ -298,8 +303,11 @@ async def stream_agent_response(
             elif stream_mode == "custom":
                 custom_info = chunk_data
                 if isinstance(custom_info, dict) and custom_info.get("type") == "trace":
+                    trace_content = custom_info.get("content", {})
+                    if isinstance(trace_content, dict):
+                        trace_payload = {**trace_payload, **trace_content}
                     yield json.dumps(
-                        {"type": "trace", "content": custom_info.get("content", {})},
+                        {"type": "trace", "content": trace_content},
                         ensure_ascii=False,
                     ) + "\n"
                 else:
@@ -348,6 +356,7 @@ async def stream_agent_response(
                 user_message=user_message,
                 ai_message=ai_message,
                 sources=sources_to_send,
+                trace=trace_payload,
             )
 
     except Exception as e:
@@ -365,6 +374,7 @@ async def save_conversation_messages(
     user_message: str,
     ai_message: str,
     sources=None,
+    trace=None,
 ):
     start_time = time.time()
     """后台任务：保存对话到数据库"""
@@ -388,6 +398,7 @@ async def save_conversation_messages(
             role="ai",
             content=ai_message,
             sources=sources,
+            trace=trace,
         )
 
         logger.info(

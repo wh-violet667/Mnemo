@@ -11,6 +11,7 @@ validate_env()
 
 import api
 import uvicorn
+import config
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from milvus_client import get_milvus_client
@@ -30,11 +31,13 @@ logger = logging.getLogger(__name__)
 # 定时任务，每3分钟检查一次是否提取存在psql中的消息
 async def check_and_store_memory():
     """检查并提取存在psql中的消息"""
+    summarize_model_name = os.getenv("SUMMARIZATION_MODEL", "qwen-turbo")
     summarize_model = ChatOpenAI(
-        model=os.getenv("SUMMARIZATION_MODEL", "qwen-turbo"),
+        model=summarize_model_name,
         openai_api_key=os.getenv("DASHSCOPE_API_KEY"),
         openai_api_base=os.getenv("BASE_URL"),
-        temperature=0.6
+        temperature=0.6,
+        extra_body=config.chat_model_extra_body(summarize_model_name),
     )
     while True:
         try:

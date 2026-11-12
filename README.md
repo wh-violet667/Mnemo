@@ -27,7 +27,7 @@
 Mnemo 围绕这两点做了四件事：
 
 - **长期记忆**：摘要、语义、情节、程序四类记忆 + 用户画像，后台定时压缩对话并提取；右侧记忆抽屉可查看分类、刷新和删除。
-- **可追溯检索**：父子块 + BM25/稠密混合检索 + RRF + `qwen3-rerank`，回答用 `[1]` 标注来源；引用编号可跳转，来源卡片可展开。
+- **可追溯检索**：父子块 + BM25/稠密混合检索 + RRF + `qwen3.7-text-rerank`，回答用 `[1]` 标注来源；引用编号可跳转，来源卡片可展开。
 - **可交互流式**：回答生成过程中可停止，完成后可复制、重新生成；失败或停止后可重试。
 - **多会话隔离**：每个会话独立 Redis checkpoint，刷新/切换会话不会串上下文。
 
@@ -81,7 +81,7 @@ flowchart LR
 
     subgraph app["应用层"]
         API["⚡ FastAPI<br/>:8010"]
-        AGENT["🧠 LangGraph Agent<br/>qwen-plus"]
+        AGENT["🧠 LangGraph Agent<br/>deepseek-v4.1-flash"]
         T1["🔍 search_knowledge_base"]
         T2["🧩 get_memory"]
         T3["💬 get_raw_conversation"]
@@ -93,7 +93,7 @@ flowchart LR
         RD[("⚡ Redis<br/>checkpoint · 画像缓存")]
     end
 
-    EXT["☁️ DashScope<br/>qwen-plus · embedding · rerank"]
+    EXT["☁️ DashScope<br/>DeepSeek V4.1 Flash · embedding · rerank"]
     BG["⏱️ 180s 记忆任务"]
 
     UI -->|"HTTP / 逐行 JSON"| API
@@ -156,7 +156,7 @@ flowchart LR
 
 - BM25 负责专有名词、编号、精确匹配；稠密向量负责语义改写。
 - RRF 融合两路结果，避免分数尺度不一致。
-- `qwen3-rerank` 对父块做二次排序；失败时降级为 RRF 顺序，不阻断回答。
+- `qwen3.7-text-rerank` 对父块做二次排序；失败时降级为 RRF 顺序，不阻断回答。
 - 评测显示 rerank 主要提升 MRR，不提升已经饱和的 Recall@5。
 
 ### 四类记忆
@@ -289,12 +289,12 @@ cp .env.docker.example .env
 
 ```env
 DASHSCOPE_API_KEY=sk-...
-AGENT_BASE_MODEL=qwen-plus
+AGENT_BASE_MODEL=deepseek-v4.1-flash
 AGENT_TOP_K=5
 AGENT_TEMPERATURE=0.7
-SUMMARIZATION_MODEL=qwen-plus
+SUMMARIZATION_MODEL=deepseek-v4.1-flash
 EMBEDDING_MODEL=text-embedding-v4
-RERANK_MODEL=qwen3-rerank
+RERANK_MODEL=qwen3.7-text-rerank
 Milvus_url=https://in03-xxxx.serverless.ali-cn-hangzhou.cloud.zilliz.com.cn
 Token=...
 
@@ -308,7 +308,7 @@ AGENTIC_MAX_QUERIES=3
 
 `Token` 是 Zilliz API Key，或 `用户名:密码`。本地无认证 Milvus 可以留空。
 
-`SUMMARIZATION_MODEL` 只用于后台记忆抽取；`qwen-turbo` 更便宜，`qwen-plus` 的 JSON 输出更稳定，遇到限流或解析失败时可以切换。
+`SUMMARIZATION_MODEL` 只用于后台记忆抽取；当前与主模型同为 DeepSeek V4.1 Flash，关闭思考模式以降低延迟。
 
 ### 4. 启动后端
 
@@ -504,7 +504,7 @@ Mnemo/
 - **路由仍有误判**：`auto` 在 violet 50 条中有 2 条单跳问题被路由到 deep；需要更多路由测试集再调规则。
 - **没有 CI**：目前依靠本地 pytest 和手动评测，没有 GitHub Actions 门禁。
 - **前端仍以单文件为主**：请求流已拆到 `frontend/streaming.py`，但 `frontend/app.py` 仍承担约 1660 行 UI/CSS/状态，后续应继续拆分组件与状态。
-- **rerank 有延迟成本**：`qwen3-rerank` 会增加一次远程重排调用，适合对排序质量敏感的场景。
+- **rerank 有延迟成本**：`qwen3.7-text-rerank` 会增加一次远程重排调用，适合对排序质量敏感的场景。
 - **依赖外部服务**：DashScope 和 Zilliz 都是云服务，离线环境需要替换为本地模型/本地 Milvus。
 - **索引是最终一致**：PostgreSQL 事务提交后若 Milvus 投影失败，需要运行 `reindex_memories.py`；尚未实现自动 outbox worker。
 - **冲突策略仍是阈值式**：≥0.9 会把旧记忆标记为 superseded，尚未接入 LLM 判断 ADD / UPDATE / NOOP；相似但不同的事实可能被误替换。

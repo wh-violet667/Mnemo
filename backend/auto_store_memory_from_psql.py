@@ -600,11 +600,13 @@ if __name__ == "__main__":
     sys.path.append(".")
 
     async def main():
+        summarize_model_name = os.getenv("SUMMARIZATION_MODEL", "qwen-turbo")
         summarize_model = ChatOpenAI(
-            model=os.getenv("SUMMARIZATION_MODEL", "qwen-turbo"),
+            model=summarize_model_name,
             openai_api_key=os.getenv("DASHSCOPE_API_KEY"),
             openai_api_base=os.getenv("BASE_URL"),
             temperature=0.5,  # 总结模型温度，控制总结对话的随机性，0-1之间，0越确定，1越随机
+            extra_body=config.chat_model_extra_body(summarize_model_name),
         )
 
         results = await run_compression_task(summarize_model)

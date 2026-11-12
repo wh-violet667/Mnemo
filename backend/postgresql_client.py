@@ -239,12 +239,14 @@ class PostgreSQLParentClient:
                             role VARCHAR(10) NOT NULL,
                             content TEXT NOT NULL,
                             sources TEXT,
+                            trace TEXT,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         );
 
                         -- 兼容旧库：补列 + 回填（CREATE TABLE IF NOT EXISTS 不会修改已存在的表）
                         ALTER TABLE raw_conversations ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(64);
                         ALTER TABLE raw_conversations ADD COLUMN IF NOT EXISTS sources TEXT;
+                        ALTER TABLE raw_conversations ADD COLUMN IF NOT EXISTS trace TEXT;
                         ALTER TABLE conversations ADD COLUMN IF NOT EXISTS knowledge_base_id VARCHAR(128);
                         UPDATE raw_conversations
                         SET conversation_id = thread_id
@@ -587,11 +589,16 @@ class PostgreSQLParentClient:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT role, content, sources, created_at
-                FROM raw_conversations
-                WHERE user_id = $1 AND conversation_id = $2
+                WITH recent AS (
+                    SELECT id, role, content, sources, trace, created_at
+                    FROM raw_conversations
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT $3
+                )
+                SELECT role, content, sources, trace, created_at
+                FROM recent
                 ORDER BY created_at ASC, id ASC
-                LIMIT $3
             """,
                 user_id,
                 conversation_id,
@@ -609,6 +616,14 @@ class PostgreSQLParentClient:
                     item["sources"] = []
             else:
                 item["sources"] = []
+            raw_trace = item.get("trace")
+            if raw_trace:
+                try:
+                    item["trace"] = json.loads(raw_trace)
+                except Exception:
+                    item["trace"] = None
+            else:
+                item["trace"] = None
             messages.append(item)
         return messages
 
@@ -1215,6 +1230,7 @@ class PostgreSQLParentClient:
         content: str,
         conversation_id: Optional[str] = None,
         sources: Optional[List[Dict]] = None,
+        trace: Optional[Dict] = None,
     ) -> None:
         """
         添加对话消息
@@ -1226,12 +1242,14 @@ class PostgreSQLParentClient:
             content: 消息内容
             conversation_id: 会话 ID；为空时回落到 thread_id，兼容旧数据
             sources: AI 回答引用的来源列表，序列化为 JSON 存库
+            trace: AI 本轮检索/记忆轨迹，序列化为 JSON 存库
         """
         if not self.pool:
             raise RuntimeError("Connection pool not initialized")
 
         conversation_id = conversation_id or thread_id
         sources_json = json.dumps(sources, ensure_ascii=False) if sources else None
+        trace_json = json.dumps(trace, ensure_ascii=False) if trace else None
 
         try:
             async with self.pool.acquire() as conn:
@@ -1239,8 +1257,8 @@ class PostgreSQLParentClient:
                     await conn.execute(
                         """
                         INSERT INTO raw_conversations
-                            (id, user_id, thread_id, conversation_id, role, content, sources)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            (id, user_id, thread_id, conversation_id, role, content, sources, trace)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     """,
                         str(uuid.uuid4()),
                         user_id,
@@ -1249,6 +1267,7 @@ class PostgreSQLParentClient:
                         role,
                         content,
                         sources_json,
+                        trace_json,
                     )
                     await conn.execute(
                         """
@@ -1657,6 +1676,30 @@ class PostgreSQLParentClient:
             }
             for row in rows
         ]
+
+    async def count_memories(
+        self,
+        user_id: int,
+        memory_type: Optional[str] = None,
+    ) -> int:
+        """统计 active 记忆总数，不受分页 limit 影响。"""
+
+        if not self.pool:
+            return 0
+
+        params: List[Any] = [user_id]
+        sql = """
+            SELECT COUNT(*)
+            FROM memories
+            WHERE user_id = $1 AND status = 'active'
+        """
+        if memory_type:
+            params.append(memory_type)
+            sql += f" AND memory_type = ${len(params)}"
+
+        async with self.pool.acquire() as conn:
+            total = await conn.fetchval(sql, *params)
+        return int(total or 0)
 
     async def soft_delete_memory(self, memory_id: str, user_id: int) -> int:
         """软删除：保留事实与版本，Milvus 状态由调用方同步。"""

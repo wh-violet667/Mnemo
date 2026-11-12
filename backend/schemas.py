@@ -82,6 +82,7 @@ class ConversationMessageItem(BaseModel):
     content: str
     created_at: Optional[datetime] = None
     sources: Optional[List[Dict[str, Any]]] = None
+    trace: Optional[Dict[str, Any]] = None
 
 
 class ConversationMessagesResponse(BaseModel):
@@ -104,6 +105,7 @@ class MemoryItem(BaseModel):
 class MemoryListResponse(BaseModel):
     status: str
     count: int
+    total: int = 0
     memories: List[MemoryItem]
 
 #上下文模型

@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
+import config
 from citations import build_numbered_context, dedupe_documents, order_by_rerank
 from routing import (
     build_initial_queries,
@@ -149,11 +150,13 @@ def _get_structured_model(cache_name: str):
         return existing
     from langchain_openai import ChatOpenAI
 
+    summarize_model_name = os.getenv("SUMMARIZATION_MODEL", "qwen-turbo")
     model = ChatOpenAI(
-        model=os.getenv("SUMMARIZATION_MODEL", "qwen-turbo"),
+        model=summarize_model_name,
         openai_api_key=os.getenv("DASHSCOPE_API_KEY"),
         openai_api_base=os.getenv("BASE_URL"),
         temperature=0.1,
+        extra_body=config.chat_model_extra_body(summarize_model_name),
     )
     globals()[cache_name] = model
     return model

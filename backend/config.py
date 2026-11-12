@@ -1,5 +1,14 @@
 import os
 
+
+def chat_model_extra_body(model_name: str) -> dict:
+    """Provider-specific switches that must not leak to other models."""
+    if "deepseek" in (model_name or "").lower():
+        # Keep the agent responsive and avoid spending output tokens on
+        # reasoning that the streaming UI does not display.
+        return {"enable_thinking": False}
+    return {}
+
 # 运行默认值：API、Agent 和评测身份都从这里读取，避免多处硬编码不一致。
 # AGENT_TOP_K 是服务端默认召回数；请求可以覆盖它（见 api.py 的 top_k 参数）。
 default_top_k = int(os.getenv("AGENT_TOP_K", "5"))
