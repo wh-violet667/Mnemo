@@ -38,6 +38,10 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:8010")
     parser.add_argument("--user-id", type=int, default=1)
     parser.add_argument("--kb-id", default="violet-kb")
+    parser.add_argument("--parent-chunk-size", type=int, default=None)
+    parser.add_argument("--parent-chunk-overlap", type=int, default=None)
+    parser.add_argument("--child-chunk-size", type=int, default=None)
+    parser.add_argument("--child-chunk-overlap", type=int, default=None)
     parser.add_argument(
         "--corpus-dir",
         default=None,
@@ -82,11 +86,26 @@ def main() -> None:
     )
     print("create kb:", response.status_code, response.text[:120])
 
+    chunk_data = {
+        key: value
+        for key, value in {
+            "parent_chunk_size": args.parent_chunk_size,
+            "parent_chunk_overlap": args.parent_chunk_overlap,
+            "child_chunk_size": args.child_chunk_size,
+            "child_chunk_overlap": args.child_chunk_overlap,
+        }.items()
+        if value is not None
+    }
+
     for docx in docx_files:
         with docx.open("rb") as handle:
             response = requests.post(
                 f"{base}/document_upload",
-                data={"knowledge_base_id": args.kb_id, "user_id": str(args.user_id)},
+                data={
+                    "knowledge_base_id": args.kb_id,
+                    "user_id": str(args.user_id),
+                    **chunk_data,
+                },
                 files={
                     "file": (
                         docx.name,
@@ -97,8 +116,13 @@ def main() -> None:
                 timeout=120,
             )
         print(f"upload {docx.name}: {response.status_code} {response.text[:100]}")
+        if response.status_code != 200:
+            raise SystemExit(
+                f"上传 {docx.name} 失败: {response.status_code} {response.text[:300]}"
+            )
 
     expected = len(docx_files)
+    done = []
     for _ in range(120):
         time.sleep(2)
         response = requests.get(

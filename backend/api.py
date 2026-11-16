@@ -8,6 +8,7 @@ from fastapi import (
     APIRouter,
     UploadFile,
     File,
+    Form,
     HTTPException,
     BackgroundTasks,
     Request,
@@ -31,6 +32,7 @@ from identifiers import (
     normalize_file_hash,
     normalize_knowledge_base_id,
 )
+from chunking import ChunkConfig, validate_chunk_config
 from agent import (
     stream_agent_response,
     delete_thread_checkpoint,
@@ -105,6 +107,24 @@ def _file_hash_or_422(value: str) -> str:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _chunk_config_or_422(
+    *,
+    parent_chunk_size: int | None,
+    parent_chunk_overlap: int | None,
+    child_chunk_size: int | None,
+    child_chunk_overlap: int | None,
+) -> ChunkConfig:
+    try:
+        return validate_chunk_config(
+            parent_chunk_size=parent_chunk_size,
+            parent_chunk_overlap=parent_chunk_overlap,
+            child_chunk_size=child_chunk_size,
+            child_chunk_overlap=child_chunk_overlap,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _cleanup_temp_file(path: Path | None) -> None:
     try:
         if path:
@@ -119,6 +139,10 @@ async def file_upload(
     file: UploadFile = File(...),
     knowledge_base_id: str = File(...),
     user_id: int = File(...),  # 新增 user_id 参数
+    parent_chunk_size: int | None = Form(None),
+    parent_chunk_overlap: int | None = Form(None),
+    child_chunk_size: int | None = Form(None),
+    child_chunk_overlap: int | None = Form(None),
     background_tasks: BackgroundTasks = None,
     postgresql_client=Depends(get_postgresql_client),
     milvus_client=Depends(get_milvus_client),
@@ -131,6 +155,12 @@ async def file_upload(
     async with upload_semaphore:
         try:
             knowledge_base_id = _kb_id_or_422(knowledge_base_id)
+            chunk_config = _chunk_config_or_422(
+                parent_chunk_size=parent_chunk_size,
+                parent_chunk_overlap=parent_chunk_overlap,
+                child_chunk_size=child_chunk_size,
+                child_chunk_overlap=child_chunk_overlap,
+            )
             filename = Path(file.filename or "upload").name or "upload"
             logger.info(f"文件名: {filename}")
             file_lower = filename.lower()
@@ -257,7 +287,9 @@ async def file_upload(
                 background_tasks = BackgroundTasks()
 
             # DocumentProcessor 需要改为异步版本
-            document_instance = DocumentProcessor(hash_storage)
+            document_instance = DocumentProcessor(
+                hash_storage, chunk_config=chunk_config
+            )
 
             # 后台任务：成功写 ready，失败写 failed + error
             background_tasks.add_task(

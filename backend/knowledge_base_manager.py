@@ -236,6 +236,23 @@ class KnowledgeBaseManager:
         ]
         return list(dict.fromkeys(parent_ids))
 
+    def _filter_expression(self, knowledge_base_id: str, user_id: int) -> str:
+        """Build the Milvus filter shared by parent and child retrieval."""
+
+        knowledge_base_id = normalize_knowledge_base_id(
+            knowledge_base_id, allow_empty=True
+        )
+        user_id = int(user_id)
+        if knowledge_base_id == "默认知识库":
+            return f"user_id == {user_id}"
+        if knowledge_base_id == "":
+            # 未选择知识库时保持空结果，而不是放开到该用户的所有知识库
+            return f'knowledge_base_id == "" and user_id == {user_id}'
+        return (
+            f"knowledge_base_id == {milvus_literal(knowledge_base_id)} "
+            f"and user_id == {user_id}"
+        )
+
     async def hybrid_retrieval_knowledge_base(
         self,
         query: str,
@@ -250,21 +267,7 @@ class KnowledgeBaseManager:
         mode="dense"：只走稠密检索，用于消融实验或排查问题。
         """
 
-        # 构建过滤表达式；知识库名允许中文，但不能包含会破坏 Milvus 字符串的字符
-        knowledge_base_id = normalize_knowledge_base_id(
-            knowledge_base_id, allow_empty=True
-        )
-        user_id = int(user_id)
-        if knowledge_base_id == "默认知识库":
-            filter_expr = f"user_id == {user_id}"
-        elif knowledge_base_id == "":
-            # 未选择知识库时保持空结果，而不是放开到该用户的所有知识库
-            filter_expr = f'knowledge_base_id == "" and user_id == {user_id}'
-        else:
-            filter_expr = (
-                f"knowledge_base_id == {milvus_literal(knowledge_base_id)} "
-                f"and user_id == {user_id}"
-            )
+        filter_expr = self._filter_expression(knowledge_base_id, user_id)
 
         try:
             writer = get_stream_writer()
@@ -320,6 +323,100 @@ class KnowledgeBaseManager:
         except Exception as e:
             logger.error(f"混合检索失败：{e},降级为稠密向量检索")
             return await self._dense_search(dense_vector, filter_expr, top_k * 3)
+
+    async def search_child_chunks(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        user_id: int,
+        top_k: int = 5,
+        mode: str = "hybrid",
+    ) -> List[Dict[str, Any]]:
+        """Return child-chunk hits for chunk-level evaluation.
+
+        Production retrieval deliberately collapses hits to parent IDs before
+        reranking.  Chunking experiments need the child-level ordering, so this
+        method keeps the text and score of each hit without changing the normal
+        retrieval path.
+        """
+
+        filter_expr = self._filter_expression(knowledge_base_id, user_id)
+        dense_vector = await self.get_dense_vector(query)
+        if not dense_vector:
+            return []
+
+        def _to_chunk(hit: Dict[str, Any]) -> Dict[str, Any]:
+            entity = hit.get("entity") or {}
+            if not isinstance(entity, dict):
+                entity = dict(entity)
+            metadata = entity.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            return {
+                "id": entity.get("id"),
+                "parent_id": entity.get("parent_id"),
+                "file_hash": entity.get("file_hash"),
+                "file_name": metadata.get("file_name") or "",
+                "text": entity.get("text") or "",
+                "score": hit.get("distance"),
+            }
+
+        if mode != "hybrid":
+            results = await self.client.search(
+                collection_name=self.collection_name,
+                data=[dense_vector],
+                anns_field="dense_vector",
+                search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+                limit=top_k,
+                filter=filter_expr,
+                output_fields=["parent_id", "text", "file_hash", "metadata"],
+            )
+            chunks = [
+                _to_chunk(hit) for hit in (results[0] if results else [])
+            ]
+            return [chunk for chunk in chunks if chunk["text"]]
+
+        dense_req = AnnSearchRequest(
+            data=[dense_vector],
+            anns_field="dense_vector",
+            param={"metric_type": "COSINE", "params": {"ef": 64}},
+            limit=top_k * 3,
+            expr=filter_expr,
+        )
+        sparse_req = AnnSearchRequest(
+            data=[query],
+            anns_field="sparse_bm25",
+            param={"metric_type": "BM25"},
+            limit=top_k * 3,
+            expr=filter_expr,
+        )
+        try:
+            results = await self.client.hybrid_search(
+                collection_name=self.collection_name,
+                reqs=[dense_req, sparse_req],
+                ranker=RRFRanker(),
+                limit=top_k,
+                output_fields=["parent_id", "text", "file_hash", "metadata"],
+            )
+            chunks = [
+                _to_chunk(hit) for hit in (results[0] if results else [])
+            ]
+            return [chunk for chunk in chunks if chunk["text"]]
+        except Exception as e:
+            logger.error(f"子块混合检索失败：{e},降级为稠密向量检索")
+            results = await self.client.search(
+                collection_name=self.collection_name,
+                data=[dense_vector],
+                anns_field="dense_vector",
+                search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+                limit=top_k,
+                filter=filter_expr,
+                output_fields=["parent_id", "text", "file_hash", "metadata"],
+            )
+            chunks = [
+                _to_chunk(hit) for hit in (results[0] if results else [])
+            ]
+            return [chunk for chunk in chunks if chunk["text"]]
 
     async def delete_knowledge_file_chunks(
         self, knowledge_base_id: str, user_id: int

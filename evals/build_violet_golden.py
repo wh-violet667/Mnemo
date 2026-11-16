@@ -11,6 +11,9 @@
 注意：标签是文档级粒度（docx 入库后会被切成多个父块），命中该文件任意
 父块即判对，指标比父块级判定偏乐观，解读报告时需注明。
 
+生成后请再运行 `python evals/build_gold_evidence.py` 补 `gold_evidence`；
+否则会退回文档级判定。
+
 用法：
     python evals/build_violet_golden.py
     python evals/build_violet_golden.py --kb-dir data/violet-evergarden-kb
@@ -106,6 +109,25 @@ def main() -> None:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Keep previously built evidence labels when regenerating the base rows.
+    # Run build_gold_evidence.py again if the source documents changed.
+    existing_evidence = {}
+    if output_path.exists():
+        with output_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                previous = json.loads(line)
+                if previous.get("gold_evidence"):
+                    existing_evidence[str(previous.get("id"))] = previous[
+                        "gold_evidence"
+                    ]
+    for row in rows:
+        if row["id"] in existing_evidence:
+            row["gold_evidence"] = existing_evidence[row["id"]]
+
     with output_path.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")

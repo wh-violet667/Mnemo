@@ -201,6 +201,23 @@ class AsyncMilvusClientWrapper:
             mode=mode,
         )
 
+    async def search_child_chunks(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        top_k: int,
+        user_id: int,
+        mode: str = "hybrid",
+    ):
+        """子块级检索（评测用，不改变生产父块检索路径）。"""
+        return await self.knowledge_base_manager.search_child_chunks(
+            query=query,
+            knowledge_base_id=knowledge_base_id,
+            top_k=top_k,
+            user_id=user_id,
+            mode=mode,
+        )
+
     async def add_chunks_batch(
         self, knowledge_base_id: str, chunks, user_id: int
     ) -> bool:

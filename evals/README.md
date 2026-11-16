@@ -4,7 +4,7 @@
 
 评测集只有一套：`evals/golden_violet.jsonl`，共 50 条问题，对应 `violet-kb`。
 题型分布：31 条单跳、7 条多跳、4 条数值、4 条不可回答、2 条版本冲突、2 条别名。
-每条同时带有 `expected_files`、`required_facts` 和 `reference_answer`，检索评测先用 `expected_files`，后续答案评测可直接用参考答案。
+每条同时带有 `expected_files`、`required_facts`、`reference_answer` 和 `gold_evidence`。检索评测优先用 `gold_evidence` 的 quote 覆盖率，`expected_files` 只作为旧标签回退；答案评测可直接用参考答案。
 
 ## 1. 评测语料
 
@@ -51,7 +51,7 @@ python evals/run_eval.py --retrieval-mode auto
 python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 ```
 
-输出 Recall@5、MRR、P50/P95 延迟、分题型指标和未命中样本。
+输出 Recall@k、MRR、Precision@k、nDCG@k、P50/P95 延迟、分题型指标和未命中样本；默认按 `gold_evidence` 判定，`--granularity child` 时直接评测子块。
 
 ### 3.1 运行身份（每次 eval 都写）
 
@@ -71,9 +71,70 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 
 `answer_eval --resume` 会比较这份身份；KB、代码、模型或配置变化时拒绝续跑，避免把两次不同的实验拼成一个 run。
 
-`top_k` 现在会真正传给 `/chat_with_agent/stream`（后端缺省时回落到 `AGENT_TOP_K`），不再是只写进报告的装饰值。
+`top_k` 现在会真正传给 `/chat_with_agent/stream`（后端缺省时回落到 `AGENT_TOP_K`），不再是只写进报告里的装饰值。
+
+## 3.2 证据级标签与 chunking 实验
+
+`golden_violet.jsonl` 现在带 `gold_evidence`，不再只标“正确文件”。例如：
+
+```json
+{
+  "file": "01-overview.docx",
+  "quote": "TV 动画制作\n\n京都动画",
+  "start": 398,
+  "end": 422,
+  "fact": "京都动画"
+}
+```
+
+生成/校验：
+
+```bash
+python evals/build_gold_evidence.py --check-only
+python evals/build_gold_evidence.py
+```
+
+`run_eval.py` 的关键行为：
+
+- 有 `gold_evidence` 时，按 **chunk 文本与证据 quote 的字符 bigram 覆盖率** 判定相关；
+- 没有证据标签时才回退到旧的 `expected_files`；
+- `--granularity child` 直接评测 Milvus 子块（chunking 实验用）；
+- `--granularity parent` 评测回表后的父块（生产检索路径）；
+- 输出 `Recall@k / MRR / Precision@k / nDCG@k` 和每个问题的 `best_evidence_overlap`。
+
+受控实验：
+
+```bash
+# 只看计划，不连接服务
+python evals/chunk_experiment.py --dry-run
+
+# 3 个策略：child 200/0、200/50、400/0；各自建独立 KB
+python evals/chunk_experiment.py --run-id chunk-v1
+
+# 或显式使用配置模板
+python evals/chunk_experiment.py --configs evals/chunk_configs.json --run-id chunk-v1
+
+# 先跑 10 条 pilot
+python evals/chunk_experiment.py --limit 10 --run-id chunk-pilot
+```
+
+脚本会为每个配置建独立知识库、重新上传语料、跑 `run_eval`，最后生成
+[`docs/chunking-comparison.md`](../docs/chunking-comparison.md)：
+
+- 各策略的 Recall / MRR / Precision / nDCG / P50 / P95；
+- 相对基线的配对 bootstrap 95% CI；
+- hit/miss 翻转样本、top files、gold evidence 和 `best_overlap`。
+
+### 已知边界
+
+- `gold_evidence` 由 `required_facts` + `reference_answer` + 段落重叠自动生成，仍建议人工抽检 10–15 条；自动标签的 quote 可能包含整段表格或相邻段落。
+- 子块级评测直接评测 Milvus 子块，仍可走 hybrid + rerank，但不回表父块；父块级评测包含回表和 rerank。
+- 50 条问题上 bootstrap 区间仍可能较宽，报告应同时看效应量和区间，不要只看单个最高分。
+- 修改 chunk 配置必须重建独立 KB；不能复用旧的 `violet-kb` 向量。
 
 ## 4. 实测结果（50 条问题，k=5）
+
+> 下表是加入 `gold_evidence` 之前的文档级历史结果；`run_eval.py` 现在默认按证据重叠判定，旧数字不能直接和新结果比较。
 
 | 模式 | Recall@5 | MRR | P50 | P95 |
 |---|---:|---:|---:|---:|
@@ -91,11 +152,11 @@ python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
 
 ## 5. 已知边界
 
-- **标签是文档级**：命中 `expected_files` 中任意一个文件的任意父块即判对，MRR/Recall 偏乐观。父块级标签需要后续补 `expected_parent_ids`。
+- **标签已升级为证据级，但仍是自动生成**：`gold_evidence` 用 quote 覆盖率判定 chunk 是否相关；没有证据标签的旧样本才回退到 `expected_files`。自动标签需要人工抽检。
 - **检索评测只测检索层**：答案正确性、忠实度和引用支持率见第 6 节答案评测。
 - **检索层的 4 条不可回答样本**只统计“是否零召回”；答案评测额外补了 6 条，共 10 条用于拒答指标。
 - **violet 语料不提交**：默认在 `data/violet-evergarden-kb/`，公开仓库没有完整语料；课程提交包可以自带，或用 `--corpus-dir` / `VIOLET_KB_DIR` 指定。
-- **分块消融另开实验**：修改 chunk size / overlap 需要重建索引，不能直接复用当前 `violet-kb` 的向量。
+- **分块消融已脚本化**：`chunk_experiment.py` 会为每个配置重建独立 KB；不能直接复用当前 `violet-kb` 的向量。
 - **meta 默认不进 Git**：`evals/results/` 被 `.gitignore` 忽略；提交报告时把需要引用的 `_meta.json` 复制到 `docs/`，或用 `--meta-output` 指定受跟踪的路径。
 
 ## 6. 答案评测
@@ -139,5 +200,5 @@ python evals/answer_eval.py --no-judge --limit 10
 边界：
 
 - 上下文按 trace 查询重建，会多一次检索调用；`Hit@5` 仅作答案评测诊断，官方检索指标以 `run_eval.py` 为准；
-- 文档级标签仍未升级为父块级；
+- 检索层已使用 `gold_evidence`；答案评测的上下文覆盖仍按文档级 `expected_files` 计算，二者不能混用；
 - judge 默认 `qwen-plus`（DashScope），生成模型为 `deepseek-v4.1-flash`（OpenCode Go）；仍需人工抽检和 `--judge-model` 交叉验证。

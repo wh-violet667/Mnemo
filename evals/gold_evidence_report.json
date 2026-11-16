@@ -1,0 +1,34 @@
+{
+  "golden": "evals/golden_violet.jsonl",
+  "corpus": "data/violet-evergarden-kb",
+  "rows": 50,
+  "rows_with_evidence": 46,
+  "rows_without_evidence": [],
+  "evidence_count": 137,
+  "missing_facts": [
+    {
+      "id": "v-q011",
+      "missing": [
+        "07-production.docx:C·H 邮政",
+        "07-production.docx:C.H Postal"
+      ]
+    },
+    {
+      "id": "v-q012",
+      "missing": [
+        "10-terminology.docx:奥兰多博士",
+        "10-terminology.docx:莫莉",
+        "10-terminology.docx:失明"
+      ]
+    },
+    {
+      "id": "v-q026",
+      "missing": [
+        "06-films.docx:安·马格诺利亚",
+        "06-films.docx:Anne Magnolia",
+        "06-films.docx:祖孙"
+      ]
+    }
+  ],
+  "validation_errors": []
+}

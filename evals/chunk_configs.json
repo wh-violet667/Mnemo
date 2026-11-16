@@ -1,0 +1,26 @@
+[
+  {
+    "name": "child-200-o0",
+    "parent_chunk_size": 1000,
+    "parent_chunk_overlap": 200,
+    "child_chunk_size": 200,
+    "child_chunk_overlap": 0,
+    "granularity": "child"
+  },
+  {
+    "name": "child-200-o50",
+    "parent_chunk_size": 1000,
+    "parent_chunk_overlap": 200,
+    "child_chunk_size": 200,
+    "child_chunk_overlap": 50,
+    "granularity": "child"
+  },
+  {
+    "name": "child-400-o0",
+    "parent_chunk_size": 1000,
+    "parent_chunk_overlap": 200,
+    "child_chunk_size": 400,
+    "child_chunk_overlap": 0,
+    "granularity": "child"
+  }
+]

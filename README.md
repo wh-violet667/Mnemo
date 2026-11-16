@@ -35,6 +35,8 @@ Mnemo 围绕这两点做了四件事：
 
 50 条 violet 语料问题的检索评测（`violet-kb`，12 份 DOCX，k=5）：
 
+> 下表是加入 `gold_evidence` 之前的文档级历史结果。现在 `run_eval.py` 默认按证据 quote 覆盖率判定，并支持 `--granularity child`；旧数字不能直接和新结果比较。
+
 | 模式 | Recall@5 | MRR | P50 | P95 |
 |---|---:|---:|---:|---:|
 | baseline（hybrid+rerank） | 1.000 | 0.832 | 2208 ms | 2457 ms |
@@ -46,7 +48,24 @@ Mnemo 围绕这两点做了四件事：
 - `fast` 的 MRR 略高于 baseline，但 **deep / auto 没有继续提升**；deep 的 P95 约 12 秒，auto 约 8 秒，约为 fast 的 4–5 倍。
 - 因此当前 Agentic-lite 的价值是**可控的多轮轨迹和可观测性**，不是已经被数据证明的质量提升。
 - 当前默认模式是 `fast`；需要多轮反思时显式选择 `auto` 或 `deep`。
-- violet 的标签是文档级（命中该文件任意父块即判对），MRR/Recall 偏乐观；答案级指标见下节。
+- 上表是旧文档级标签；现在 `golden_violet.jsonl` 带 `gold_evidence`，重跑后按证据 quote 覆盖率判定，旧数字不能直接对比。答案级指标见下节。
+
+### 分块策略对比
+
+同一批 12 份 DOCX、同一 `text-embedding-v4` / `qwen3.7-text-rerank`，只改 child chunk 配置；50 题，child 级检索，`top_k=5`，`hybrid+rerank`：
+
+| 策略 | Recall@5 | MRR | Precision@5 | nDCG@5 | P50 / P95 | 子块数 |
+|---|---:|---:|---:|---:|---:|---:|
+| `child-200-o0` | 0.848 | 0.670 | 0.300 | 0.700 | 2870 / 5777 ms | 321 |
+| `child-200-o50` | 0.913 | 0.715 | 0.330 | 0.749 | 3146 / 5577 ms | 352 |
+| `child-400-o0` | **0.957** | **0.765** | **0.357** | **0.811** | 2683 / 3625 ms | 164 |
+
+相对 `child-200-o0` 的配对 bootstrap 95% CI：
+
+- `child-400-o0`：ΔRecall **+0.109**（+0.022~+0.217）、ΔPrecision **+0.057**（+0.017~+0.100）、ΔnDCG **+0.111**（+0.028~+0.196）；MRR 的区间跨 0。
+- `child-200-o50`：ΔRecall +0.065（-0.022~+0.153）、ΔnDCG +0.049（-0.027~+0.133），统计上不显著。
+
+结论：本次语料上 **400 字非重叠子块**在 Recall、Precision、nDCG 和延迟上都最好；overlap 50 有小幅正向但不显著。完整失败样本和解释见 [`docs/chunking-comparison.md`](docs/chunking-comparison.md)。
 
 ### 答案评测
 
@@ -400,11 +419,15 @@ python evals/run_eval.py --retrieval-mode fast
 python evals/run_eval.py --retrieval-mode deep
 python evals/run_eval.py --retrieval-mode auto
 python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
+
+# 3. 分块策略 A/B：独立建库 + 证据级指标
+python evals/chunk_experiment.py --dry-run
+python evals/chunk_experiment.py --run-id chunk-v1
 ```
 
-输出 Recall@5、MRR、P50/P95、分题型指标和未命中样本。完整语料不提交到公开仓库，放置说明见 [`data/README.md`](data/README.md)，评测细节见 [`evals/README.md`](evals/README.md)。
+输出 Recall@k、MRR、Precision@k、nDCG@k、P50/P95、分题型指标和未命中样本；chunking 实验会生成 `docs/chunking-comparison.md`。完整语料不提交到公开仓库，放置说明见 [`data/README.md`](data/README.md)，评测细节见 [`evals/README.md`](evals/README.md)。
 
-> violet 的标签是文档级：命中 `expected_files` 中任意文件的任意父块即判对，指标偏乐观。答案正确性、忠实度和引用支持率由单独的答案评测补齐。
+> `golden_violet.jsonl` 现在带 `gold_evidence`：命中判定按 chunk 文本与证据 quote 的覆盖率，而不是“命中正确文件即可”。没有证据标签的旧样本才回退到文档级判定。答案正确性、忠实度和引用支持率由单独的答案评测补齐。
 
 ## 答案评测
 
@@ -436,10 +459,11 @@ python evals/answer_eval.py --no-judge --limit 10
 python -m pytest -q
 ```
 
-当前 84 个测试（含参数化），覆盖：
+当前 97 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
-- Recall@k / MRR / 分位数
+- Recall@k / MRR / Precision@k / nDCG / 分位数
+- 证据 quote 覆盖率、chunk 配置校验、配对 bootstrap 报告
 - 会话 ID 校验、thread ID 生成、标题生成
 - 记忆 supersede 候选选择
 - `fast / deep / auto` 路由规则
@@ -484,22 +508,28 @@ Mnemo/
 │   ├── answer-eval-report.md     # 56 条答案评测报告
 │   ├── answer-eval-summary.json  # 答案评测聚合指标
 │   ├── answer-eval-human-review.csv # 12 条人工抽检表
+│   ├── chunking-comparison.md    # 分块策略对比报告（脚本生成）
 │   └── phase1-agentic-lite.md   # Agentic-lite 设计与实现文档
 ├── data/
 │   ├── README.md                # 本地语料说明
 │   └── violet-evergarden-kb/    # 本地语料，.gitignore 忽略
 ├── evals/
 │   ├── build_violet_golden.py   # 转换 violet benchmark
-│   ├── seed_violet_kb.py        # 上传 12 份 DOCX 到 violet-kb
-│   ├── golden_violet.jsonl      # 50 条评测问题
+│   ├── build_gold_evidence.py   # 生成 chunk 级 gold_evidence
+│   ├── evidence.py              # 证据 quote 覆盖率 / 段落匹配
+│   ├── seed_violet_kb.py        # 上传 12 份 DOCX 到指定 KB
+│   ├── chunk_experiment.py      # 分块策略 A/B + bootstrap 报告
+│   ├── chunk_configs.json       # 默认 3 组 chunk 配置
+│   ├── golden_violet.jsonl      # 50 条评测问题 + gold_evidence
+│   ├── gold_evidence_report.json # 证据标签质量报告
 │   ├── unanswerable_violet.jsonl # 6 条补充拒答题
-│   ├── run_eval.py              # 检索层 baseline/fast/deep/auto
+│   ├── run_eval.py              # 检索层 parent/child 评测
 │   ├── answer_eval.py           # 端到端答案评测 runner
 │   ├── answer_metrics.py        # 确定性指标
 │   ├── judges.py                # Judge A/B 提示词与解析
 │   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
-├── tests/                       # pytest（84 个测试）
+├── tests/                       # pytest（97 个测试）
 ├── scripts/                     # WSL/Docker 安装、Agentic 冒烟
 │   ├── 01-enable-wsl.*
 │   ├── 02-install-docker.ps1
@@ -512,7 +542,7 @@ Mnemo/
 ## 已知限制
 
 - **单用户演示**：`MNEMO_USER_ID` 默认 1，没有登录和租户隔离，不能直接公开部署。
-- **评测集依赖本地语料**：50 条问题对应 12 份 DOCX，默认放在 `data/violet-evergarden-kb/`（不提交），可用 `--corpus-dir` / `VIOLET_KB_DIR` 指定；标签是文档级，MRR/Recall 偏乐观。
+- **评测集依赖本地语料**：50 条问题对应 12 份 DOCX，默认放在 `data/violet-evergarden-kb/`（不提交），可用 `--corpus-dir` / `VIOLET_KB_DIR` 指定；检索标签已升级为 `gold_evidence`，但自动生成的 quote 仍需人工抽检。
 - **Agentic 未显示质量增益**：在 violet 50 条上，deep / auto 没有提升 Recall 或 MRR，P95 反而增加约 4-5 倍；默认已改为 `fast`，需要多轮时显式选择 `auto` / `deep`。
 - **答案评测依赖 LLM judge**：Judge A/B 默认 `qwen-plus`（DashScope），生成模型为 `deepseek-v4.1-flash`（OpenCode Go），两者不同源；`human_review.csv` 提供 12 条分层样本，正式结论前仍需人工抽检。
 - **路由仍有误判**：`auto` 在 violet 50 条中有 2 条单跳问题被路由到 deep；需要更多路由测试集再调规则。
@@ -528,7 +558,7 @@ Mnemo/
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 84 个测试
+- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 97 个测试
 - [x] 默认检索模式改为 `fast`，需要多轮时显式选择
 - [x] 答案评测：FactualCorrectness / Faithfulness / Citation / Refusal（violet 50 + 6 拒答）
 - [ ] 人工抽检 12–15 条并复核 Judge A/B
@@ -540,7 +570,7 @@ Mnemo/
 - [ ] 文档 `status=current/archived` 元数据过滤，解决版本区分
 - [ ] GitHub Actions：ruff + pytest + eval 格式检查
 - [ ] 应用 Dockerfile / compose 一键启动
-- [ ] 分块策略消融（chunk size / overlap）+ 答案评测复跑
+- [x] 分块策略对比脚本（`evals/chunk_experiment.py`）+ 证据级指标；实测结果待跑
 - [ ] 拆分 `frontend/app.py`
 
 

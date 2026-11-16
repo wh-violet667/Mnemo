@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-"""检索评测脚本：Recall@k / MRR@k / 延迟。
+"""检索评测脚本：证据级 Recall / MRR / Precision / nDCG / 延迟。
 
-只测「检索层」：给定问题，看正确父块是否出现在前 k 条。
-答案质量（是否胡说）建议另加 LLM judge 或人工抽检。
+默认按 `gold_evidence` 的 quote 覆盖率判定相关；没有证据标签时回退到
+`expected_files`。`--granularity child` 直接评测 Milvus 子块，用于比较
+chunking 策略；默认 parent 评测生产路径回表后的父块。
 
 用法：
     python evals/run_eval.py --check-only
@@ -10,6 +11,7 @@
     python evals/run_eval.py --retrieval-mode deep
     python evals/run_eval.py --retrieval-mode auto
     python evals/run_eval.py --retrieval-mode baseline --mode hybrid+rerank
+    python evals/run_eval.py --granularity child --kb-id violet-kb-c200-o0
 """
 
 from __future__ import annotations
@@ -36,7 +38,17 @@ for _candidate in (ROOT / ".env", ROOT / "backend" / ".env"):
     if _candidate.exists():
         load_dotenv(_candidate)
 
-from evals.metrics import recall_at_k, reciprocal_rank, summarize  # noqa: E402
+from evals.evidence import (  # noqa: E402
+    best_evidence_overlap,
+    is_document_relevant,
+)
+from evals.metrics import (  # noqa: E402
+    ndcg_at_k,
+    precision_at_k,
+    recall_at_k,
+    reciprocal_rank,
+    summarize,
+)
 from evals.run_identity import (  # noqa: E402
     build_kb_block,
     build_run_identity,
@@ -52,6 +64,15 @@ def _sanitize_run_id(value: str) -> str:
 
     cleaned = re.sub(r"[^A-Za-z0-9_-]", "", value or "")
     return cleaned[:40] or datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _parse_chunk_config(value: str) -> Dict[str, Any] | None:
+    if not value:
+        return None
+    path = Path(value)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(value)
 
 
 def load_golden(path: Path) -> List[Dict[str, Any]]:
@@ -77,28 +98,9 @@ def load_golden(path: Path) -> List[Dict[str, Any]]:
 
 
 def is_relevant(document: Dict[str, Any], row: Dict[str, Any]) -> bool:
-    """命中判定：优先 expected_parent_ids，其次 expected_files（多文件），最后 expected_phrase / expected_file。"""
+    """命中判定：有 gold_evidence 时按证据重叠，否则回退旧标签。"""
 
-    expected_ids = [str(pid) for pid in (row.get("expected_parent_ids") or [])]
-    if expected_ids:
-        return str(document.get("parent_id")) in set(expected_ids)
-
-    doc_file = str(document.get("file_name") or "")
-    expected_files = [str(f).strip() for f in (row.get("expected_files") or []) if str(f).strip()]
-    if expected_files:
-        stem_matches = [
-            f for f in expected_files if Path(f).stem in doc_file
-        ]
-        return bool(stem_matches)
-
-    phrase = " ".join(str(row.get("expected_phrase") or "").split())
-    file_name = str(row.get("expected_file") or "").strip()
-    text = " ".join(str(document.get("text") or "").split())
-    if phrase and phrase in text:
-        return True
-    if file_name and file_name in doc_file:
-        return True
-    return False
+    return is_document_relevant(document, row)
 
 
 def _is_unanswerable(row: Dict[str, Any]) -> bool:
@@ -115,7 +117,10 @@ def _is_unanswerable(row: Dict[str, Any]) -> bool:
 
 def _print_report(summary: Dict[str, float], results: List[Dict[str, Any]], args) -> None:
     print(f"\ngolden: {args.golden}")
-    print(f"mode: {args.mode} | retrieval_mode: {args.retrieval_mode} | n: {len(results)} | k: {args.k}")
+    print(
+        f"mode: {args.mode} | retrieval_mode: {args.retrieval_mode} | "
+        f"granularity: {args.granularity} | n: {len(results)} | k: {args.k}"
+    )
     print("\n| 指标 | 值 |")
     print("|---|---|")
     for key, value in summary.items():
@@ -198,6 +203,10 @@ async def evaluate(args) -> None:
     if not rows:
         raise SystemExit("golden 为空，没有可评测的样本")
 
+    chunk_config = _parse_chunk_config(args.chunk_config)
+    if args.granularity == "child" and args.retrieval_mode != "baseline":
+        raise SystemExit("--granularity child 只支持 --retrieval-mode baseline")
+
     milvus_client = await get_milvus_client()
     postgresql_client = await get_postgresql_client()
 
@@ -228,6 +237,8 @@ async def evaluate(args) -> None:
             "golden_sha256": sha256_file(args.golden),
             "retrieval_mode": args.retrieval_mode,
             "baseline_mode": args.mode,
+            "granularity": args.granularity,
+            "chunk_config": chunk_config,
             "top_k": args.k,
             "limit": args.limit,
             "sample_count": len(rows),
@@ -248,7 +259,22 @@ async def evaluate(args) -> None:
         started = time.perf_counter()
         trace_info: Dict[str, Any] = {}
 
-        if args.retrieval_mode == "baseline":
+        if args.granularity == "child":
+            mode = "dense" if args.mode == "dense" else "hybrid"
+            documents = await milvus_client.search_child_chunks(
+                query=row["query"],
+                knowledge_base_id=kb_id,
+                top_k=args.k * 3 if args.mode == "hybrid+rerank" else args.k,
+                user_id=user_id,
+                mode=mode,
+            )
+            if args.mode == "hybrid+rerank" and documents:
+                reranked = await rerank_documents(
+                    row["query"], [doc["text"] for doc in documents], args.k
+                )
+                documents = order_by_rerank(documents, reranked)[: args.k]
+            effective_mode = f"{mode}:child"
+        elif args.retrieval_mode == "baseline":
             mode = "dense" if args.mode == "dense" else "hybrid"
             parent_ids = await milvus_client.hybrid_retrieval_knowledge_base(
                 query=row["query"],
@@ -301,6 +327,11 @@ async def evaluate(args) -> None:
                 "mode": effective_mode,
                 "recall": None if unanswerable else recall_at_k(relevances, args.k),
                 "rr": None if unanswerable else reciprocal_rank(relevances),
+                "precision": (
+                    None if unanswerable else precision_at_k(relevances, args.k)
+                ),
+                "ndcg": None if unanswerable else ndcg_at_k(relevances, args.k),
+                "best_evidence_overlap": best_evidence_overlap(documents, row),
                 "clean": (len(documents) == 0) if unanswerable else None,
                 "latency_ms": latency_ms,
                 "top_files": [doc.get("file_name") for doc in documents],
@@ -319,6 +350,9 @@ async def evaluate(args) -> None:
         payload = {
             "golden": str(args.golden),
             "mode": args.mode,
+            "retrieval_mode": args.retrieval_mode,
+            "granularity": args.granularity,
+            "chunk_config": chunk_config,
             "k": args.k,
             "summary": summary,
             "run_identity": run_identity,
@@ -357,6 +391,17 @@ def main() -> None:
         default="baseline",
         help="baseline 走 --mode 的旧链路；fast/deep/auto 走 Agentic-lite run_retrieval",
     )
+    parser.add_argument(
+        "--granularity",
+        choices=["parent", "child"],
+        default="parent",
+        help="parent=回表父块（生产路径）；child=Milvus 子块（chunking 实验）",
+    )
+    parser.add_argument(
+        "--chunk-config",
+        default="",
+        help="本次索引的 chunk 配置（JSON 字符串或 JSON 文件），写入 meta",
+    )
     parser.add_argument("--output", default="", help="把结果写成 JSON")
     parser.add_argument(
         "--run-id",
@@ -376,7 +421,11 @@ def main() -> None:
 
     if args.check_only:
         rows = load_golden(Path(args.golden))
-        print(f"OK：{len(rows)} 条样本，格式正确。")
+        with_evidence = sum(1 for row in rows if row.get("gold_evidence"))
+        print(
+            f"OK：{len(rows)} 条样本，格式正确；"
+            f"{with_evidence} 条带 gold_evidence。"
+        )
         return
 
     asyncio.run(evaluate(args))

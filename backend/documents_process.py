@@ -8,8 +8,8 @@ import asyncio
 from langchain_community.document_loaders import Docx2txtLoader, PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from milvus_client import get_milvus_client
-import config
-from typing import List, Dict, Set
+from chunking import ChunkConfig, default_chunk_config
+from typing import List, Dict
 import os
 from urllib.parse import unquote
 from pathlib import Path
@@ -93,18 +93,23 @@ async def process_document_job(
 class DocumentProcessor:
     """文档加载和分片服务"""
 
-    def __init__(self, hash_storage: HashStorage = None):
+    def __init__(
+        self,
+        hash_storage: HashStorage = None,
+        chunk_config: ChunkConfig | None = None,
+    ):
+        self.chunk_config = chunk_config or default_chunk_config()
         self.parent_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=config.parent_chunk_size,
-            chunk_overlap=config.parent_chunk_overlap,
+            chunk_size=self.chunk_config.parent_chunk_size,
+            chunk_overlap=self.chunk_config.parent_chunk_overlap,
             add_start_index=False,
-            separators=config.separators,
+            separators=list(self.chunk_config.separators),
         )
         self.child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=config.child_chunk_size,
-            chunk_overlap=config.child_chunk_overlap,
+            chunk_size=self.chunk_config.child_chunk_size,
+            chunk_overlap=self.chunk_config.child_chunk_overlap,
             add_start_index=False,
-            separators=config.separators,
+            separators=list(self.chunk_config.separators),
         )
         self.temp_dir = os.getenv("TEMP_DIR", "/tmp")
         self.hash_storage = hash_storage
