@@ -374,6 +374,35 @@ class MemoryManager:
                     if mem_type in final_results:
                         final_results[mem_type].extend(memories)
 
+        # PostgreSQL is the source of truth.  A failed delete/supersede projection
+        # can leave a stale ``active`` row in Milvus, so verify IDs before ranking
+        # and fail closed instead of returning a memory the user has removed.
+        memory_ids = [
+            str(memory.get("id"))
+            for memories in final_results.values()
+            for memory in memories
+            if memory.get("id")
+        ]
+        if memory_ids:
+            try:
+                from postgresql_client import get_postgresql_client
+
+                pg_client = await get_postgresql_client()
+                active_ids = await pg_client.get_active_memory_ids(
+                    memory_ids, user_id
+                )
+                final_results = {
+                    mem_type: [
+                        memory
+                        for memory in memories
+                        if str(memory.get("id")) in active_ids
+                    ]
+                    for mem_type, memories in final_results.items()
+                }
+            except Exception as e:
+                logger.error(f"Postgres 记忆状态校验失败，按空结果处理: {e}")
+                return {}
+
         top_k_memories = self.get_the_top_k_memories(
             memory_dict=final_results,
             memory_configs=memory_configs,

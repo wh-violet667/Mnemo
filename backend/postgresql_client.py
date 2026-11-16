@@ -829,6 +829,27 @@ class PostgreSQLParentClient:
             logger.error(f"Error checking file duplicate: {e}")
             raise
 
+    async def get_file_status(
+        self, file_hash: str, knowledge_base_id: str, user_id: int
+    ) -> Optional[str]:
+        """Return the ingestion status for a file, or ``None`` if absent."""
+
+        if not self.pool:
+            raise RuntimeError("Connection pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            status = await conn.fetchval(
+                """
+                SELECT status FROM file_metadata
+                WHERE file_hash = $1 AND knowledge_base_id = $2 AND user_id = $3
+                LIMIT 1
+                """,
+                file_hash,
+                knowledge_base_id,
+                user_id,
+            )
+        return str(status) if status is not None else None
+
     async def add_file_metadata(
         self, file_hash: str, file_name: str, knowledge_base_id: str, user_id: int
     ):
@@ -887,6 +908,137 @@ class PostgreSQLParentClient:
             logger.error(f"Error adding file metadata: {e}")
             raise
 
+    async def add_document_batch(
+        self,
+        file_hash: str,
+        file_name: str,
+        knowledge_base_id: str,
+        user_id: int,
+        parents_data: List[Dict[str, any]],
+        chunk_hashes: List[str],
+    ) -> None:
+        """Write parent chunks and chunk hashes atomically.
+
+        The API creates the ``file_metadata`` row before scheduling this job.
+        We update (not insert) it here so a file deleted while processing cannot
+        be resurrected by a late background task.  The old rows for the same
+        file are removed first, so a retry after a failed ingestion cannot leave
+        two generations of parent chunks behind.
+
+        Milvus is intentionally outside this transaction; callers must delete
+        the old projection before re-processing a failed file.
+        """
+
+        if not self.pool:
+            raise RuntimeError("Connection pool not initialized")
+
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    # The file row must already exist; never recreate it here.
+                    updated = await conn.fetchval(
+                        """
+                        UPDATE file_metadata
+                        SET file_name = $2,
+                            status = 'processing',
+                            error = NULL,
+                            updated_at = NOW()
+                        WHERE file_hash = $1
+                          AND knowledge_base_id = $3
+                          AND user_id = $4
+                        RETURNING 1
+                        """,
+                        file_hash,
+                        file_name,
+                        knowledge_base_id,
+                        user_id,
+                    )
+                    if not updated:
+                        raise RuntimeError(
+                            "file metadata not found; upload may have been deleted"
+                        )
+
+                    # Make the batch idempotent for retries.
+                    await conn.execute(
+                        """
+                        DELETE FROM parent_chunks
+                        WHERE file_hash = $1
+                          AND knowledge_base_id = $2
+                          AND user_id = $3
+                        """,
+                        file_hash,
+                        knowledge_base_id,
+                        user_id,
+                    )
+                    await conn.execute(
+                        """
+                        DELETE FROM chunk_hashes
+                        WHERE file_hash = $1
+                          AND knowledge_base_id = $2
+                          AND user_id = $3
+                        """,
+                        file_hash,
+                        knowledge_base_id,
+                        user_id,
+                    )
+
+                    if parents_data:
+                        await conn.executemany(
+                            """
+                            INSERT INTO parent_chunks (
+                                parent_id, knowledge_base_id, user_id,
+                                text, file_name, file_hash
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            ON CONFLICT (parent_id, knowledge_base_id, user_id)
+                            DO UPDATE SET
+                                text = EXCLUDED.text,
+                                file_name = EXCLUDED.file_name,
+                                file_hash = EXCLUDED.file_hash,
+                                updated_at = CURRENT_TIMESTAMP
+                            """,
+                            [
+                                (
+                                    item["parent_id"],
+                                    item["knowledge_base_id"],
+                                    user_id,
+                                    item["text"],
+                                    item["file_name"],
+                                    item["file_hash"],
+                                )
+                                for item in parents_data
+                            ],
+                        )
+
+                    if chunk_hashes:
+                        await conn.executemany(
+                            """
+                            INSERT INTO chunk_hashes (
+                                chunk_hash, file_hash, knowledge_base_id, user_id
+                            )
+                            VALUES ($1, $2, $3, $4)
+                            ON CONFLICT (
+                                chunk_hash, file_hash, knowledge_base_id, user_id
+                            ) DO NOTHING
+                            """,
+                            [
+                                (chunk_hash, file_hash, knowledge_base_id, user_id)
+                                for chunk_hash in chunk_hashes
+                            ],
+                        )
+
+                    logger.info(
+                        "原子写入文档 %s：父块 %s，块哈希 %s（知识库 %s，用户 %s）",
+                        file_hash[:16],
+                        len(parents_data),
+                        len(chunk_hashes),
+                        knowledge_base_id,
+                        user_id,
+                    )
+        except Exception as e:
+            logger.error(f"Error adding document batch: {e}")
+            raise
+
     async def update_file_status(
         self,
         file_hash: str,
@@ -919,6 +1071,44 @@ class PostgreSQLParentClient:
                 )
         except Exception as e:
             logger.warning(f"更新文件状态失败: {e}")
+
+    async def clear_document_chunks(
+        self, file_hash: str, knowledge_base_id: str, user_id: int
+    ) -> None:
+        """Remove parent/chunk rows while keeping the failed file record.
+
+        Used when the Milvus projection fails: the file stays visible as
+        ``failed`` for the UI, but no half-ingested content remains searchable
+        through PostgreSQL.
+        """
+
+        if not self.pool:
+            return
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    DELETE FROM parent_chunks
+                    WHERE file_hash = $1
+                      AND knowledge_base_id = $2
+                      AND user_id = $3
+                    """,
+                    file_hash,
+                    knowledge_base_id,
+                    user_id,
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM chunk_hashes
+                    WHERE file_hash = $1
+                      AND knowledge_base_id = $2
+                      AND user_id = $3
+                    """,
+                    file_hash,
+                    knowledge_base_id,
+                    user_id,
+                )
 
     async def delete_file(
         self, file_hash: str, knowledge_base_id: str, user_id: int
@@ -1700,6 +1890,36 @@ class PostgreSQLParentClient:
         async with self.pool.acquire() as conn:
             total = await conn.fetchval(sql, *params)
         return int(total or 0)
+
+    async def get_active_memory_ids(
+        self, memory_ids: List[str], user_id: int
+    ) -> Set[str]:
+        """Return the subset of memory IDs still active in PostgreSQL.
+
+        Milvus is a projection, so a failed delete/supersede update can leave
+        stale rows marked ``active`` there.  Retrieval uses this check to fail
+        closed instead of returning a memory the user has already deleted.
+        """
+
+        if not self.pool or not memory_ids:
+            return set()
+
+        normalized = [str(memory_id) for memory_id in memory_ids if memory_id]
+        if not normalized:
+            return set()
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT memory_id FROM memories
+                WHERE user_id = $1
+                  AND status = 'active'
+                  AND memory_id = ANY($2::text[])
+                """,
+                user_id,
+                normalized,
+            )
+        return {str(row["memory_id"]) for row in rows}
 
     async def soft_delete_memory(self, memory_id: str, user_id: int) -> int:
         """软删除：保留事实与版本，Milvus 状态由调用方同步。"""

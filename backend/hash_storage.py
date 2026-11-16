@@ -1,5 +1,5 @@
 # hash_storage.py
-from typing import Set, List
+from typing import Optional, Set, List
 import logging
 from postgresql_client import get_postgresql_client
 
@@ -29,7 +29,14 @@ class HashStorage:
         """检查文件哈希是否已存在"""
         client = await self._get_pg_client()
         return await client.is_file_duplicate(file_hash, knowledge_base_id, user_id)
-    
+
+    async def get_file_status(
+        self, file_hash: str, knowledge_base_id: str, user_id: int
+    ) -> Optional[str]:
+        """返回文件入库状态；不存在时返回 None。"""
+        client = await self._get_pg_client()
+        return await client.get_file_status(file_hash, knowledge_base_id, user_id)
+
     async def add_file_hash(self, file_hash: str, file_name: str, knowledge_base_id: str, user_id: int):
         """添加文件哈希值（同时添加文件元数据）"""
         client = await self._get_pg_client()

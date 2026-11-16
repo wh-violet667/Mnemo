@@ -24,7 +24,13 @@ import uuid
 import re
 import aiofiles
 import os
+from pathlib import Path
 from fastapi.responses import StreamingResponse
+from identifiers import (
+    InvalidIdentifier,
+    normalize_file_hash,
+    normalize_knowledge_base_id,
+)
 from agent import (
     stream_agent_response,
     delete_thread_checkpoint,
@@ -85,6 +91,28 @@ async def get_milvus_client(request: Request):
     return request.app.state.milvus_client
 
 
+def _kb_id_or_422(value: str, *, allow_empty: bool = False) -> str:
+    try:
+        return normalize_knowledge_base_id(value, allow_empty=allow_empty)
+    except InvalidIdentifier as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _file_hash_or_422(value: str) -> str:
+    try:
+        return normalize_file_hash(value)
+    except InvalidIdentifier as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _cleanup_temp_file(path: Path | None) -> None:
+    try:
+        if path:
+            Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 @router.post("/document_upload", response_model=DocumentUploadResponse)
 async def file_upload(
     request: Request,
@@ -92,6 +120,8 @@ async def file_upload(
     knowledge_base_id: str = File(...),
     user_id: int = File(...),  # 新增 user_id 参数
     background_tasks: BackgroundTasks = None,
+    postgresql_client=Depends(get_postgresql_client),
+    milvus_client=Depends(get_milvus_client),
 ):
     """上传文档并进行embedding,支持文件去重"""
 
@@ -100,7 +130,8 @@ async def file_upload(
 
     async with upload_semaphore:
         try:
-            filename = file.filename
+            knowledge_base_id = _kb_id_or_422(knowledge_base_id)
+            filename = Path(file.filename or "upload").name or "upload"
             logger.info(f"文件名: {filename}")
             file_lower = filename.lower()
 
@@ -123,7 +154,10 @@ async def file_upload(
             sha256 = hashlib.sha256()
             temp_processor = TempDocumentProcessor()
 
-            temp_file_path = temp_processor.temp_dir / f"{uuid.uuid4()}_{filename}"
+            temp_file_path = (
+                temp_processor.temp_dir
+                / f"{uuid.uuid4().hex}{Path(filename).suffix.lower()}"
+            )
 
             # 流式计算哈希，写入文件
             try:
@@ -176,18 +210,13 @@ async def file_upload(
                         pass
                 raise HTTPException(status_code=400, detail="客户端已断开连接")
 
-            # 异步调用检查文件是否重复（传入 user_id）
-            if await hash_storage.is_file_duplicate(
+            # 文件已存在时区分状态：failed 允许清理后重传，processing/ready 仍按重复处理。
+            existing_status = await hash_storage.get_file_status(
                 file_hash, knowledge_base_id, user_id
-            ):
-                logger.info(f"文件已存在，跳过处理: {filename}")
-                if temp_file_path and temp_file_path.exists():
-                    try:
-                        # 异步删除
-                        await temp_processor.delete_temp_file(temp_file_path)
-                    except:
-                        pass
-
+            )
+            if existing_status and existing_status != "failed":
+                logger.info(f"文件已存在（{existing_status}），跳过处理: {filename}")
+                _cleanup_temp_file(temp_file_path)
                 return DocumentUploadResponse(
                     filename=filename,
                     message="文件已存在，无需重复上传",
@@ -195,6 +224,28 @@ async def file_upload(
                     knowledge_base_id=knowledge_base_id,
                     is_duplicate=True,
                 )
+
+            if existing_status == "failed":
+                # 上一次入库失败，先清掉旧投影和旧元数据，再按新文件重新处理。
+                logger.info(f"发现失败记录，清理后重传: {filename}")
+                try:
+                    await milvus_client.delete_file_chunks(
+                        knowledge_base_id=knowledge_base_id,
+                        file_hash=file_hash,
+                        user_id=user_id,
+                    )
+                    await postgresql_client.delete_file(
+                        file_hash=file_hash,
+                        knowledge_base_id=knowledge_base_id,
+                        user_id=user_id,
+                    )
+                except Exception as exc:
+                    logger.error(f"清理失败文件记录失败: {exc}", exc_info=True)
+                    _cleanup_temp_file(temp_file_path)
+                    raise HTTPException(
+                        status_code=503,
+                        detail="上一次失败的入库数据未能清理，请稍后重试",
+                    ) from exc
 
             # 先落一条 processing 记录，后台任务失败时也能被看见
             await hash_storage.add_file_hash(
@@ -229,20 +280,17 @@ async def file_upload(
             )
 
         except HTTPException:
+            _cleanup_temp_file(temp_file_path)
             raise
         except asyncio.CancelledError:
             logger.warning(
                 f"请求被取消: {filename if 'filename' in locals() else 'unknown'}"
             )
+            _cleanup_temp_file(temp_file_path)
             raise HTTPException(status_code=499, detail="客户端已取消请求")
         except Exception as e:
             logger.error(f"文件上传错误: {str(e)}", exc_info=True)
-            # 清理临时文件
-            if temp_file_path and temp_file_path.exists():
-                try:
-                    await temp_processor.delete_temp_file(temp_file_path)
-                except:
-                    pass
+            _cleanup_temp_file(temp_file_path)
             raise HTTPException(status_code=500, detail=f"文件处理失败: {str(e)}")
 
 
@@ -253,6 +301,7 @@ async def create_knowledge_base(
     postgresql_client=Depends(get_postgresql_client),
 ):
     """创建知识库"""
+    knowledge_base_id = _kb_id_or_422(knowledge_base_id)
     result = await postgresql_client.create_knowledge_base(knowledge_base_id, user_id)
 
     if not result["success"]:
@@ -281,24 +330,10 @@ async def delete_knowledge_base(
     postgresql_client=Depends(get_postgresql_client),
     milvus_client=Depends(get_milvus_client),
 ):
-    """删除知识库（先删 PostgreSQL，成功后再删 Milvus）"""
+    """删除知识库（先删 Milvus，成功后再删 PostgreSQL，保证失败可重试）"""
+    knowledge_base_id = _kb_id_or_422(knowledge_base_id)
     try:
-        # 1. 删除 PostgreSQL 中的知识库
-        pg_result = await postgresql_client.delete_knowledge_base(
-            knowledge_base_id, user_id
-        )
-
-        # 检查 PostgreSQL 删除是否成功
-        if not pg_result.get("success", False):
-            logger.error(
-                f"PostgreSQL删除知识库失败: {pg_result.get('message', '未知错误')}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=pg_result.get("message", "知识库不存在或无权删除"),
-            )
-
-        # 2. PostgreSQL 删除成功，继续删除 Milvus 中的子块
+        # 1. 先删向量投影。Milvus 失败时 PostgreSQL 元数据仍在，用户可以重试。
         try:
             child_chunks_deleted = await milvus_client.delete_knowledge_file_chunks(
                 knowledge_base_id=knowledge_base_id,
@@ -306,14 +341,26 @@ async def delete_knowledge_base(
             )
             logger.info(f"Milvus 删除成功，删除了 {child_chunks_deleted} 个子块")
         except Exception as e:
-            # Milvus 删除失败，但 PostgreSQL 已删除成功
             logger.error(
-                f"Milvus 删除失败（PostgreSQL 已删除知识库 {knowledge_base_id}）: {e}"
+                f"Milvus 删除失败，保留 PostgreSQL 知识库 {knowledge_base_id}: {e}"
             )
-            # 可以选择是否抛出异常，这里选择抛出异常让用户知道部分失败
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"PostgreSQL 删除成功，但 Milvus 删除失败: {str(e)}",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="向量索引删除失败，知识库尚未删除，请重试",
+            ) from e
+
+        # 2. Milvus 删除成功后，再删 PostgreSQL（级联删除文件/父块/块哈希）。
+        pg_result = await postgresql_client.delete_knowledge_base(
+            knowledge_base_id, user_id
+        )
+
+        if not pg_result.get("success", False):
+            logger.error(
+                f"PostgreSQL删除知识库失败: {pg_result.get('message', '未知错误')}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=pg_result.get("message", "知识库不存在或无权删除"),
             )
 
         # 3. 全部删除成功
@@ -366,6 +413,7 @@ async def get_knowledge_base_files(
     postgresql_client=Depends(get_postgresql_client),
 ):
     """获取知识库中的所有文件"""
+    knowledge_base_id = _kb_id_or_422(knowledge_base_id)
     result = await postgresql_client.get_knowledge_base_files(
         knowledge_base_id, user_id
     )
@@ -403,31 +451,14 @@ async def delete_file(
     postgresql_client=Depends(get_postgresql_client),
     milvus_client=Depends(get_milvus_client),
 ):
-    """删除文件-通过文件哈希删除（先删 PostgreSQL，成功后再删 Milvus）"""
+    """删除文件（先删 Milvus，成功后再删 PostgreSQL，保证失败可重试）"""
+    knowledge_base_id = _kb_id_or_422(knowledge_base_id)
+    file_hash = _file_hash_or_422(file_hash)
     deleted_parent_count = 0
     deleted_child_count = 0
 
     try:
-        # 1. 删除 PostgreSQL 中的父块
-        pg_result = await postgresql_client.delete_file(
-            knowledge_base_id=knowledge_base_id,
-            file_hash=file_hash,
-            user_id=user_id,
-        )
-
-        # 检查 PostgreSQL 删除是否成功
-        if not pg_result.get("success", False):
-            # PostgreSQL 删除失败，直接返回错误
-            logger.error(f"PostgreSQL删除失败: {pg_result.get('message', '未知错误')}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"PostgreSQL删除失败: {pg_result.get('message', '未知错误')}",
-            )
-
-        # 获取删除的父块数量（用于返回信息）
-        deleted_parent_count = pg_result.get("parent_chunks_deleted", 0)
-
-        # 2. PostgreSQL 删除成功，继续删除 Milvus 中的子块
+        # 1. 先删向量投影。失败时 PostgreSQL 元数据仍在，文件仍可见且可重试。
         try:
             deleted_child_count = await milvus_client.delete_file_chunks(
                 knowledge_base_id=knowledge_base_id,
@@ -436,13 +467,29 @@ async def delete_file(
             )
             logger.info(f"Milvus 删除成功，删除了 {deleted_child_count} 个子块")
         except Exception as e:
-            # Milvus 删除失败，但 PostgreSQL 已删除成功
-            # 记录错误但返回部分成功的信息
-            logger.error(f"Milvus 删除失败（PostgreSQL 已删除成功）: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"PostgreSQL 删除成功，但 Milvus 删除失败: {str(e)}",
+            logger.error(
+                f"Milvus 删除失败，保留 PostgreSQL 文件 {file_hash[:16]}: {e}"
             )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="向量索引删除失败，文件尚未删除，请重试",
+            ) from e
+
+        # 2. Milvus 删除成功后，再删 PostgreSQL（级联删除父块和块哈希）。
+        pg_result = await postgresql_client.delete_file(
+            knowledge_base_id=knowledge_base_id,
+            file_hash=file_hash,
+            user_id=user_id,
+        )
+
+        if not pg_result.get("success", False):
+            logger.error(f"PostgreSQL删除失败: {pg_result.get('message', '未知错误')}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=pg_result.get("message", "文件不存在或无权删除"),
+            )
+
+        deleted_parent_count = pg_result.get("parent_chunks_deleted", 0)
 
         # 3. 全部删除成功
         return DocumentDeleteResponse(
@@ -467,6 +514,8 @@ async def create_conversation(
     postgresql_client=Depends(get_postgresql_client),
 ):
     """创建会话。一个用户可以有多条会话，互不共享上下文。"""
+    if knowledge_base_id:
+        knowledge_base_id = _kb_id_or_422(knowledge_base_id)
     try:
         conversation = await postgresql_client.create_conversation(
             user_id, title, knowledge_base_id or None
@@ -529,6 +578,7 @@ async def update_conversation_knowledge_base(
         raise HTTPException(status_code=422, detail=str(e))
 
     if knowledge_base_id:
+        knowledge_base_id = _kb_id_or_422(knowledge_base_id)
         result = await postgresql_client.get_user_knowledge_bases(user_id)
         if knowledge_base_id not in result.get("knowledge_bases", []):
             raise HTTPException(status_code=404, detail="知识库不存在或无权使用")
@@ -703,6 +753,7 @@ async def chat_with_agent(
     retrieval_mode 缺省时回落到 AGENTIC_DEFAULT_MODE 环境变量（默认 fast）。
     top_k 缺省时回落到 AGENT_TOP_K（默认 5）；评测脚本会显式传入并记录实际值。
     """
+    knowledge_base_id = _kb_id_or_422(knowledge_base_id, allow_empty=True)
     try:
         conversation_id = normalize_conversation_id(conversation_id)
     except ValueError as e:

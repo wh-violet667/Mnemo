@@ -9,6 +9,11 @@ from pymilvus import AnnSearchRequest, RRFRanker
 import logging
 from langgraph.config import get_stream_writer
 import time
+from identifiers import (
+    milvus_literal,
+    normalize_file_hash,
+    normalize_knowledge_base_id,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -245,11 +250,21 @@ class KnowledgeBaseManager:
         mode="dense"：只走稠密检索，用于消融实验或排查问题。
         """
 
-        # 构建过滤表达式
+        # 构建过滤表达式；知识库名允许中文，但不能包含会破坏 Milvus 字符串的字符
+        knowledge_base_id = normalize_knowledge_base_id(
+            knowledge_base_id, allow_empty=True
+        )
+        user_id = int(user_id)
         if knowledge_base_id == "默认知识库":
             filter_expr = f"user_id == {user_id}"
+        elif knowledge_base_id == "":
+            # 未选择知识库时保持空结果，而不是放开到该用户的所有知识库
+            filter_expr = f'knowledge_base_id == "" and user_id == {user_id}'
         else:
-            filter_expr = f'knowledge_base_id == "{knowledge_base_id}" and user_id == {user_id}'
+            filter_expr = (
+                f"knowledge_base_id == {milvus_literal(knowledge_base_id)} "
+                f"and user_id == {user_id}"
+            )
 
         try:
             writer = get_stream_writer()
@@ -314,8 +329,11 @@ class KnowledgeBaseManager:
         返回删除的子块数量
         """
         try:
+            knowledge_base_id = normalize_knowledge_base_id(knowledge_base_id)
+            user_id = int(user_id)
             filter_condition = (
-                f'knowledge_base_id == "{knowledge_base_id}" and user_id == {user_id}'
+                f"knowledge_base_id == {milvus_literal(knowledge_base_id)} "
+                f"and user_id == {user_id}"
             )
             result = await self.client.delete(
                 collection_name=self.collection_name, filter=filter_condition
@@ -340,7 +358,14 @@ class KnowledgeBaseManager:
     ) -> int:
         """删除指定文件的所有子块（只负责 Milvus 数据删除）"""
         try:
-            filter = f'knowledge_base_id == "{knowledge_base_id}" and file_hash == "{file_hash}" and user_id == {user_id}'
+            knowledge_base_id = normalize_knowledge_base_id(knowledge_base_id)
+            file_hash = normalize_file_hash(file_hash)
+            user_id = int(user_id)
+            filter = (
+                f"knowledge_base_id == {milvus_literal(knowledge_base_id)} "
+                f"and file_hash == {milvus_literal(file_hash)} "
+                f"and user_id == {user_id}"
+            )
 
             result = await self.client.delete(
                 collection_name=self.collection_name, filter=filter

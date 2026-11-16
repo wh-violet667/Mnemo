@@ -48,8 +48,8 @@ async def process_document_job(
 ):
     """后台文档任务包装器：把处理结果写回 file_metadata.status。
 
-    失败时保留一条 status=failed 的记录，前端可见；用户删除该文件后
-    可以重新上传，避免“上传成功但永远在处理中”的黑洞。
+    失败时保留一条 status=failed 的记录，前端可见；重新上传同一文件时
+    API 会先清理旧投影和旧元数据，避免“上传成功但永远在处理中”的黑洞。
     """
 
     pg_client = await get_postgresql_client()
@@ -210,62 +210,61 @@ class DocumentProcessor:
             logger.warning(f"文件 {filename} 加载或分割后无内容")
             return
 
-        # ========== 1. 先添加文件元数据（必须在所有外键引用之前） ==========
-        await self.hash_storage.add_file_hash(
-            file_hash, filename, knowledge_base_id, user_id
-        )
-        logger.info(f"==========添加文件元数据完成==========")
-
-        # ========== 2. 每个文件保留自己的子块 ==========
-        # 不再跨文件跳过重复子块：跳过会让新文件的父块没有对应向量，
-        # 删除旧文件后新文件就再也检索不到这段内容。
+        # ========== 1. PostgreSQL 事务：元数据 + 父块 + 块哈希 ==========
+        # 这三类数据必须一起提交；否则会出现"父块存在但块哈希缺失"或
+        # "文件记录存在但父块为空"的半成品状态。
         all_hashes = [
             hashlib.sha256(chunk.page_content.encode()).hexdigest()
             for chunk in all_child_items
         ]
-        new_child_items = all_child_items
-        new_hashes = all_hashes
+        postgresql_client = await get_postgresql_client()
+        await postgresql_client.add_document_batch(
+            file_hash=file_hash,
+            file_name=filename,
+            knowledge_base_id=knowledge_base_id,
+            user_id=user_id,
+            parents_data=parent_data_list,
+            chunk_hashes=all_hashes,
+        )
+        logger.info(
+            f"==========PostgreSQL 原子写入完成："
+            f"{len(parent_data_list)} 个父块，{len(all_hashes)} 个块哈希=========="
+        )
 
-        # ========== 3-6. 并行执行独立的数据库操作 ==========
-        # 注意：批量添加新哈希依赖文件元数据（已存在），可以与 Milvus 和 PostgreSQL 并行
-        tasks = []
-        
-        # 任务1：批量添加新哈希（如果有）
-        if new_hashes:
-            tasks.append(
-                self.hash_storage.batch_add_chunk_hashes(
-                    new_hashes, file_hash, knowledge_base_id, user_id
-                )
-            )
-        
-        # 任务2：批量插入 Milvus 数据库（只插入新子块）
-        if new_child_items:
-            milvus_client = await self._get_milvus_client()
-            tasks.append(
-                milvus_client.add_chunks_batch(
+        # ========== 2. Milvus 投影 ==========
+        # 如果用户在处理过程中删除了文件，不要再把向量写回去。
+        current_status = await postgresql_client.get_file_status(
+            file_hash, knowledge_base_id, user_id
+        )
+        if current_status != "processing":
+            raise RuntimeError("文件记录已被删除，取消 Milvus 索引写入")
+
+        # PostgreSQL 已提交。Milvus 失败时 job 会把文件标记为 failed；
+        # 用户重新上传时 API 会先按 file_hash 清理旧投影和旧元数据。
+        if all_child_items:
+            try:
+                milvus_client = await self._get_milvus_client()
+                await milvus_client.add_chunks_batch(
                     knowledge_base_id=knowledge_base_id,
-                    chunks=new_child_items,
+                    chunks=all_child_items,
                     user_id=user_id,
                 )
+            except Exception:
+                # Keep the failed file record, but remove PostgreSQL chunks so a
+                # partially written projection cannot become searchable content.
+                logger.error("Milvus 子块写入失败，清理 PostgreSQL 半成品", exc_info=True)
+                try:
+                    await postgresql_client.clear_document_chunks(
+                        file_hash=file_hash,
+                        knowledge_base_id=knowledge_base_id,
+                        user_id=user_id,
+                    )
+                except Exception:
+                    logger.error("清理 PostgreSQL 半成品失败", exc_info=True)
+                raise
+            logger.info(
+                f"==========批量插入 {len(all_child_items)} 个子块到milvus完成=========="
             )
-        
-        # 任务3：批量插入 PostgreSQL 数据库（父块）
-        postgresql_client = await get_postgresql_client()
-        tasks.append(
-            postgresql_client.add_parent_chunk_batch(parent_data_list, user_id)
-        )
-        
-        # 并行执行所有数据库操作
-        if tasks:
-            await asyncio.gather(*tasks)
-        
-        if new_hashes:
-            logger.info(f"==========批量添加 {len(new_hashes)} 个新哈希==========")
-        
-        if new_child_items:
-            logger.info(f"==========批量插入 {len(new_child_items)} 个子块到milvus完成==========")
-        
-        logger.info(f"==========批量插入 {len(parent_data_list)} 个父块到postgresql完成==========")
 
         # 清理临时文件
         tempProcessor = TempDocumentProcessor()
@@ -276,7 +275,7 @@ class DocumentProcessor:
                 "filename": filename,
                 "parent_chunks": len(parent_data_list),
                 "child_chunks": len(all_child_items),
-                "new_chunks": len(new_child_items),
+                "new_chunks": len(all_child_items),
             }
         ]
 
