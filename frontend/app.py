@@ -2021,6 +2021,16 @@ def render_sidebar() -> None:
                 else:
                     st.caption("暂无文件")
 
+                chunk_profile = st.selectbox(
+                    "上传分块策略",
+                    options=["fine-overlap", "coarse-no-overlap"],
+                    format_func=lambda value: {
+                        "fine-overlap": "细粒度 + 重叠（200/50）",
+                        "coarse-no-overlap": "粗粒度 + 无重叠（500/0）",
+                    }[value],
+                    key=f"chunk_profile_{selected_kb}",
+                    help="同一对比知识库应使用同一种分块策略；切换后请新建知识库再上传。",
+                )
                 uploaded = st.file_uploader(
                     "上传文档",
                     type=["pdf", "docx", "doc"],
@@ -2040,6 +2050,7 @@ def render_sidebar() -> None:
                                 data={
                                     "knowledge_base_id": selected_kb,
                                     "user_id": str(USER_ID),
+                                    "chunk_profile": chunk_profile,
                                 },
                                 files={
                                     "file": (

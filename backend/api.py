@@ -32,7 +32,12 @@ from identifiers import (
     normalize_file_hash,
     normalize_knowledge_base_id,
 )
-from chunking import ChunkConfig, validate_chunk_config
+from chunking import (
+    ChunkConfig,
+    list_named_chunk_configs,
+    named_chunk_config,
+    validate_chunk_config,
+)
 from agent import (
     stream_agent_response,
     delete_thread_checkpoint,
@@ -109,12 +114,23 @@ def _file_hash_or_422(value: str) -> str:
 
 def _chunk_config_or_422(
     *,
+    chunk_profile: str | None,
     parent_chunk_size: int | None,
     parent_chunk_overlap: int | None,
     child_chunk_size: int | None,
     child_chunk_overlap: int | None,
 ) -> ChunkConfig:
     try:
+        numeric_values = (
+            parent_chunk_size,
+            parent_chunk_overlap,
+            child_chunk_size,
+            child_chunk_overlap,
+        )
+        if chunk_profile:
+            if any(value is not None for value in numeric_values):
+                raise ValueError("chunk_profile 不能与显式 chunk 参数同时使用")
+            return named_chunk_config(chunk_profile)
         return validate_chunk_config(
             parent_chunk_size=parent_chunk_size,
             parent_chunk_overlap=parent_chunk_overlap,
@@ -139,6 +155,7 @@ async def file_upload(
     file: UploadFile = File(...),
     knowledge_base_id: str = File(...),
     user_id: int = File(...),  # 新增 user_id 参数
+    chunk_profile: str | None = Form(None),
     parent_chunk_size: int | None = Form(None),
     parent_chunk_overlap: int | None = Form(None),
     child_chunk_size: int | None = Form(None),
@@ -156,6 +173,7 @@ async def file_upload(
         try:
             knowledge_base_id = _kb_id_or_422(knowledge_base_id)
             chunk_config = _chunk_config_or_422(
+                chunk_profile=chunk_profile,
                 parent_chunk_size=parent_chunk_size,
                 parent_chunk_overlap=parent_chunk_overlap,
                 child_chunk_size=child_chunk_size,
@@ -759,6 +777,16 @@ async def runtime_identity() -> dict:
     """
 
     return build_runtime_identity()
+
+
+@router.get("/chunking/profiles")
+async def chunking_profiles() -> dict:
+    """List stable named profiles used by uploads and the UI selector."""
+
+    return {
+        "status": "success",
+        "profiles": list_named_chunk_configs(),
+    }
 
 
 @router.get("/chat_with_agent/stream")

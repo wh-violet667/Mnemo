@@ -13,6 +13,24 @@ from typing import Any
 import config
 
 
+DEFAULT_CHUNK_PROFILE = "fine-overlap"
+
+NAMED_CHUNK_PROFILES: dict[str, dict[str, int]] = {
+    DEFAULT_CHUNK_PROFILE: {
+        "parent_chunk_size": 1000,
+        "parent_chunk_overlap": 200,
+        "child_chunk_size": 200,
+        "child_chunk_overlap": 50,
+    },
+    "coarse-no-overlap": {
+        "parent_chunk_size": 1000,
+        "parent_chunk_overlap": 200,
+        "child_chunk_size": 500,
+        "child_chunk_overlap": 0,
+    },
+}
+
+
 @dataclass(frozen=True)
 class ChunkConfig:
     parent_chunk_size: int
@@ -35,6 +53,26 @@ def default_chunk_config() -> ChunkConfig:
         child_chunk_overlap=int(config.child_chunk_overlap),
         separators=tuple(config.separators),
     )
+
+
+def named_chunk_config(name: str | None = None) -> ChunkConfig:
+    """Resolve a stable, human-readable chunking profile."""
+
+    profile_name = (name or DEFAULT_CHUNK_PROFILE).strip()
+    params = NAMED_CHUNK_PROFILES.get(profile_name)
+    if params is None:
+        choices = ", ".join(NAMED_CHUNK_PROFILES)
+        raise ValueError(f"未知分块策略 {profile_name!r}，可选值: {choices}")
+    return validate_chunk_config(**params)
+
+
+def list_named_chunk_configs() -> list[dict[str, Any]]:
+    """Return profile metadata suitable for an API or UI selector."""
+
+    return [
+        {"name": name, **named_chunk_config(name).as_dict()}
+        for name in NAMED_CHUNK_PROFILES
+    ]
 
 
 def validate_chunk_config(

@@ -70,6 +70,15 @@ Mnemo 围绕这两点做了四件事：
 
 结论：本次语料上 **400 字非重叠子块**在 Recall、Precision、nDCG 和延迟上都最好；overlap 50 有小幅正向但不显著。完整失败样本和解释见 [`docs/chunking-comparison.md`](docs/chunking-comparison.md)。
 
+上传界面还提供两个命名策略，方便直接做双组对比：
+
+| Profile | 父块 | 子块 |
+|---|---:|---:|
+| `fine-overlap` | 1000 / 200 | 200 / 50 |
+| `coarse-no-overlap` | 1000 / 200 | 500 / 0 |
+
+`GET /chunking/profiles` 可读取策略列表；上传时传 `chunk_profile`，或继续使用显式数值参数进行自定义实验。两种传参方式不能同时使用。
+
 ### 答案评测
 
 56 条（46 可回答 + 10 不可回答），`violet-kb` / `fast` / `top_k=5`，Judge 使用 `qwen-plus`：
@@ -377,7 +386,7 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 ## 使用流程
 
 1. 创建一个知识库。
-2. 上传 PDF / DOCX，等待后台解析、分块、向量化；文件状态会显示 `processing / ready / failed`。
+2. 选择命名分块策略并上传 PDF / DOCX，等待后台解析、分块、向量化；文件状态会显示 `processing / ready / failed`。同一对比知识库应保持同一策略。
 3. 选择知识库和检索模式（快速 / 自动 / 深入），提问。
 4. 回答下方显示本次执行摘要（模式 / 轮次 / 证据数 / 记忆使用 / 耗时）；点击 `[1]` 跳到来源卡片，卡片显示支持该 claim 的 quote 和段落定位，可展开/收起。
 5. 新建/切换会话，验证上下文隔离；会话右侧 `⋯` 可重命名。
@@ -390,6 +399,7 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 |---|---|
 | 对话 | `GET /chat_with_agent/stream`（支持 `retrieval_mode=auto/fast/deep`、`top_k=1..50`） |
 | 运行时 | `GET /runtime`（评测溯源：代码版本、模型、chunk 配置；不含密钥） |
+| 分块 | `GET /chunking/profiles`（命名 profile 列表） |
 | 知识库 | `POST/GET /knowledge-bases`、`DELETE /knowledge-bases/{id}` |
 | 文件 | `POST /document_upload`、`GET /knowledge-bases/{id}/files`、`DELETE /knowledge-bases/{id}/documents/{hash}` |
 | 会话 | `POST/GET /conversations`、`PATCH/DELETE /conversations/{id}`、`PATCH /conversations/{id}/knowledge-base`、`DELETE /conversations/{id}/last-turn`、`GET /conversations/{id}/messages` |
