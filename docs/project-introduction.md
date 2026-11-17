@@ -594,15 +594,21 @@ chunk_experiment.py
 
 ---
 
-## 7. 老师可能问的问题与回答
+## 7. 老师可能问的问题与回答 / Anticipated Questions & Answers
 
-### 7.1 选题与创新
+### 7.1 选题与创新 / Topic & Contributions
 
 **Q1：这个项目和普通 ChatGPT 有什么区别？**
 
+**Q1 (EN): How is this different from ordinary ChatGPT?**
+
 普通 ChatGPT 不知道私有资料，也不能保证引用。Mnemo 把文档切块、向量化、检索、rerank、引用、长期记忆和评测串成一条完整链路；回答必须尽量落在检索证据上，并且能展开来源。
 
+**EN:** Ordinary ChatGPT does not know private documents and cannot guarantee citations. Mnemo connects ingestion, chunking, vectorization, retrieval, rerank, citations, long-term memory and evaluation into one pipeline. Answers are grounded in retrieved evidence and the sources can be expanded.
+
 **Q2：创新点是什么？是不是只是套 RAG？**
+
+**Q2 (EN): What is the contribution? Is it just RAG?**
 
 不是算法创新，而是工程和证据链创新：
 
@@ -613,25 +619,52 @@ chunk_experiment.py
 
 如果老师追问“有没有新算法”，要诚实回答：没有提出新模型或新检索算法，主要贡献是把多个工程组件做成可运行、可评测、可解释的系统。
 
+**EN:** The contribution is engineering and evidence-chain work, not a new algorithm:
+
+1. a complete retrieval pipeline with parent-child chunks, hybrid search, rerank and Agentic-lite;
+2. PostgreSQL as the memory source of truth, with Milvus as a rebuildable projection;
+3. claim-aligned quotes and locators for verifiable citations;
+4. evidence-level evaluation, independent-KB chunking comparison and paired bootstrap.
+
+If asked whether there is a new algorithm, answer honestly: there is no new model or retrieval algorithm. The contribution is turning multiple components into a runnable, measurable and explainable system.
+
 **Q3：为什么不做微调？**
+
+**Q3 (EN): Why not fine-tune a model?**
 
 资料会更新，微调成本高且不能返回来源；50 题/12 份文档也不足以支撑微调。RAG 更适合“私有事实 + 可引用 + 可更新”的场景。
 
+**EN:** Documents change, fine-tuning is expensive, and it does not provide citations. A 50-question/12-document corpus is also too small for fine-tuning. RAG fits the “private facts + citations + updates” setting much better.
+
 **Q4：目标用户是谁？**
+
+**Q4 (EN): Who is the target user?**
 
 课程/个人知识库、产品手册问答、政策文件查询等“资料私有、需要引用、需要记住用户偏好”的场景。当前实现是单用户原型。
 
-### 7.2 架构与选型
+**EN:** Course or personal knowledge bases, product manuals, policy-document search and similar settings where documents are private, citations matter and user preferences should be remembered. The current implementation is a single-user prototype.
+
+### 7.2 架构与选型 / Architecture & Choices
 
 **Q5：为什么用 FastAPI + Streamlit？**
 
+**Q5 (EN): Why FastAPI + Streamlit?**
+
 FastAPI 适合异步 IO、流式响应和依赖注入；Streamlit 能用最短时间做出可交互 Demo。生产环境可以把前端换成 React，但课程项目更看重端到端可运行。
+
+**EN:** FastAPI fits async I/O, streaming and dependency injection. Streamlit makes an interactive demo possible in the shortest time. A production system could replace the frontend with React, but this course project prioritizes an end-to-end runnable system.
 
 **Q6：为什么用 LangGraph，不用普通 LangChain chain？**
 
+**Q6 (EN): Why LangGraph instead of a plain LangChain chain?**
+
 因为需要工具调用循环、会话 checkpoint、流式事件和工具次数限制。普通 chain 更适合固定流水线，Agent 需要状态和分支。
 
+**EN:** The system needs a tool-calling loop, conversation checkpoints, streaming events and tool-call limits. A plain chain fits a fixed pipeline better; an agent needs state and branches.
+
 **Q7：为什么同时用 PostgreSQL、Milvus、Redis，是否过度设计？**
+
+**Q7 (EN): Why PostgreSQL, Milvus and Redis together? Is that over-engineered?**
 
 三者职责不同：
 
@@ -641,133 +674,259 @@ FastAPI 适合异步 IO、流式响应和依赖注入；Streamlit 能用最短�
 
 如果只用向量库，记忆版本、来源链、事务和审计很难做；如果只用 PostgreSQL，向量检索性能不够。代价是跨存储一致性，需要额外设计。
 
+**EN:** They have different responsibilities:
+
+- PostgreSQL stores facts, transactions, versions and provenance;
+- Milvus handles vector/BM25 retrieval;
+- Redis stores conversation checkpoints and cache.
+
+A vector-only store makes memory versions, provenance, transactions and auditing hard. PostgreSQL-only storage is not enough for vector retrieval performance. The cost is cross-store consistency, which needs explicit design.
+
 **Q8：为什么用父子块，不直接用一种块？**
+
+**Q8 (EN): Why parent-child chunks instead of a single chunk type?**
 
 子块小，召回准；父块大，给模型足够上下文。只用子块会导致上下文碎片化，只用父块会让向量表达被稀释。代价是存储和回表成本。
 
+**EN:** Small child chunks retrieve more precisely; large parent chunks give the model enough context. Child-only retrieval fragments context, while parent-only retrieval dilutes the embedding. The cost is extra storage and parent lookup.
+
 **Q9：为什么 hybrid，不只用向量？**
+
+**Q9 (EN): Why hybrid retrieval instead of dense-only?**
 
 dense 擅长语义相似，BM25 擅长专有名词、数字、别名和精确匹配。RRF 融合两者的排名，不需要调分数纲。失败时还能降级到 dense。
 
+**EN:** Dense retrieval is good at semantic similarity; BM25 is good at names, numbers, aliases and exact matches. RRF merges the rankings without score normalization. If hybrid search fails, the system falls back to dense retrieval.
+
 **Q10：为什么还要 rerank？**
+
+**Q10 (EN): Why add rerank?**
 
 召回阶段追求 recall，排序阶段追求 precision。rerank 能用更贵的交叉编码模型重排 top 候选，提高 MRR/证据位置；代价是延迟。
 
+**EN:** Retrieval prioritizes recall; reranking prioritizes precision. A more expensive cross-encoder reranks the top candidates and improves MRR/evidence position, at the cost of latency.
+
 **Q11：为什么对话、embedding、rerank 用不同服务？**
+
+**Q11 (EN): Why use different services for chat, embedding and rerank?**
 
 对话模型需要生成质量和成本平衡；embedding 需要中文语义能力；rerank 需要 Cross-Encoder 式的相关性判断。分开选型更灵活，也避免一个服务绑定所有能力。
 
-### 7.3 数据与一致性
+**EN:** The chat model balances generation quality and cost; the embedding model needs Chinese semantic ability; rerank needs cross-encoder-style relevance judgment. Selecting them separately is more flexible and avoids binding all capabilities to one provider.
+
+### 7.3 数据与一致性 / Data & Consistency
 
 **Q12：文档上传后到底经历了什么？**
 
+**Q12 (EN): What happens after a document is uploaded?**
+
 校验 → 临时文件 + SHA-256 → 查重/状态 → 写 processing → 后台解析 → 父子块 → PostgreSQL 单事务 → Milvus 子块向量 → ready/failed。失败会清理半成品，重传会先清理旧投影。
+
+**EN:** Validation → temp file + SHA-256 → duplicate/status check → write processing → background parsing → parent/child split → one PostgreSQL transaction → Milvus child vectors → ready/failed. Failures clean up partial data; a retry first removes the old projection.
 
 **Q13：PostgreSQL 和 Milvus 怎么保持一致？**
 
+**Q13 (EN): How are PostgreSQL and Milvus kept consistent?**
+
 PostgreSQL 是事实源；Milvus 是投影。文档入库先提交 PostgreSQL，再写 Milvus；Milvus 失败会清理 PG 半成品并标记 failed。记忆写入也是先 PG 事务，再投影 Milvus，失败标记 `index_status=failed`，用 reindex 修复。当前没有完整 outbox，这是下一步。
+
+**EN:** PostgreSQL is the source of truth; Milvus is a projection. Document ingestion commits PostgreSQL first, then writes Milvus; a Milvus failure cleans partial PostgreSQL rows and marks the file failed. Memory writes follow the same pattern: PostgreSQL transaction first, then Milvus projection; failures set `index_status=failed` and are repaired by reindex. There is no full outbox yet; that is the next step.
 
 **Q14：删除知识库/文件为什么先删 Milvus？**
 
+**Q14 (EN): Why delete Milvus before PostgreSQL for a KB or file?**
+
 如果先删 PostgreSQL，Milvus 失败后会留下孤儿向量，而且 API 重试会 404，无法清理。先删 Milvus，失败时 PostgreSQL 还在，用户可以重试；成功后再删 PG。代价是 PG 删除失败时元数据还在，但可重试。
+
+**EN:** Deleting PostgreSQL first can leave orphan vectors if Milvus fails, and an API retry then gets 404 and cannot clean them. Deleting Milvus first keeps PostgreSQL metadata available for a retry; once Milvus succeeds, PostgreSQL is deleted. The trade-off is that a PostgreSQL deletion failure leaves metadata behind, but it remains retryable.
 
 **Q15：删除记忆为什么用 PostgreSQL 过滤？**
 
+**Q15 (EN): Why does memory deletion filter through PostgreSQL?**
+
 Milvus 的 `status=deleted` 更新可能失败。检索时用 PostgreSQL 的 `status='active'` 校验 Milvus 返回的 ID，失败就按空结果处理，避免已删除记忆继续进入回答。
+
+**EN:** The Milvus `status=deleted` update can fail. Retrieval validates returned IDs against PostgreSQL `status='active'` and fails closed, so a deleted memory cannot continue to enter answers.
 
 **Q16：重复上传怎么判断？**
 
+**Q16 (EN): How is duplicate upload detected?**
+
 用文件内容 SHA-256 + 知识库 + 用户判断。`ready/processing` 视为重复；`failed` 允许清理旧记录后重传。
+
+**EN:** By file content SHA-256 plus knowledge base and user. `ready/processing` is treated as a duplicate; `failed` is allowed to clean the old record and retry.
 
 **Q17：多用户隔离怎么做的？**
 
+**Q17 (EN): How is multi-user isolation implemented?**
+
 数据模型和 Milvus filter 都有 `user_id`，但当前 `user_id` 由客户端传入，没有认证，所以只是“逻辑隔离”，不是安全隔离。公开部署前必须加登录和 token。
 
-### 7.4 检索与生成
+**EN:** The data model and Milvus filters include `user_id`, but the current `user_id` comes from the client and there is no authentication. It is logical isolation, not security isolation. Login and tokens are required before public deployment.
+
+### 7.4 检索与生成 / Retrieval & Generation
 
 **Q18：fast/auto/deep 的区别？为什么 deep 没提升还保留？**
 
+**Q18 (EN): What are fast/auto/deep? Why keep deep if it did not improve results?**
+
 fast 一次检索；auto 规则路由/零召回升级；deep 做 Plan/Retrieve/Critique/Refine。violet 50 题上 deep/auto 没提升 Recall/MRR，P95 反而高 4–5 倍，所以默认 fast。保留 deep 是为了多跳/版本冲突场景和可观测性，不是为了刷分。
+
+**EN:** Fast performs one retrieval; auto applies rule-based routing and escalates on zero recall; deep runs Plan/Retrieve/Critique/Refine. On the violet 50 questions, deep/auto did not improve Recall/MRR and P95 was 4–5× higher, so fast is the default. Deep remains for multi-hop/version-conflict cases and observability, not for chasing a benchmark number.
 
 **Q19：为什么旧的 Recall@5 是 1.000，现在只有 0.848？**
 
+**Q19 (EN): Why was the old Recall@5 1.000 but the new one 0.848?**
+
 旧标签是文档级：命中正确文件的任意父块就算对。新标签是证据级：要覆盖 gold evidence quote。后者更严格，所以数字下降是预期，不是系统变差。
+
+**EN:** The old label was document-level: any parent chunk from the correct file counted. The new label is evidence-level: the retrieved chunk must cover the gold evidence quote. The stricter definition lowers the number; it does not mean the system got worse.
 
 **Q20：为什么 Precision 只有 0.30–0.36？**
 
+**Q20 (EN): Why is Precision only 0.30–0.36?**
+
 top_k=5 里通常只有 1–2 个 chunk 覆盖证据，其他是相关但不等价的上下文；Precision@5 分母固定为 5，所以天然偏低。它反映“上下文干净程度”，不等于答案正确率。
+
+**EN:** In top-5, usually only 1–2 chunks cover the evidence; the rest are related but non-equivalent context. Precision@5 uses a fixed denominator of 5, so it is naturally low. It measures context cleanliness, not answer correctness.
 
 **Q21：400/0 最好，为什么默认还是 200/50？**
 
+**Q21 (EN): 400/0 performed best; why is the default still 200/50?**
+
 400/0 是 50 题、child 检索层的实验结果，回答质量和更大语料还没验证；直接改默认有过拟合风险。正确做法是补答案评测和多语料复核，再决定是否切换。这个回答能体现你知道“实验结论的适用范围”。
+
+**EN:** 400/0 is a 50-question, child-retrieval result; answer quality and a larger corpus are not yet verified. Changing the default immediately risks overfitting. The correct next step is answer evaluation and multi-corpus validation before switching. This answer shows that you understand the scope of an experimental conclusion.
 
 **Q22：为什么 200/50 的提升不显著？**
 
+**Q22 (EN): Why is the 200/50 improvement not significant?**
+
 ΔRecall +0.065，95% CI -0.022~+0.153，跨 0；50 题样本量小，overlap 的收益可能被题目差异淹没。不能只看均值，要看区间和效应量。
+
+**EN:** ΔRecall is +0.065 with a 95% CI of -0.022 to +0.153, crossing zero. With only 50 questions, the overlap benefit can be swamped by question-level variance. Look at intervals and effect size, not only the mean.
 
 **Q23：不可回答样本 clean rate 0% 怎么解释？**
 
+**Q23 (EN): Why is the clean rate 0% on unanswerable questions?**
+
 child 检索没有拒答阈值，top-k 总会返回 chunk，所以“零召回”不适用。真正的拒答在答案层由 prompt 和 Judge 评估；检索层这项只能说明缺少阈值，不是 chunking 的锅。
+
+**EN:** Child retrieval has no refusal threshold, so top-k always returns chunks; “zero recall” does not apply. Actual refusal is evaluated at the answer layer by the prompt and judge. This metric only shows that a threshold is missing, not that chunking is wrong.
 
 **Q24：引用是怎么保证不是编的？**
 
+**Q24 (EN): How do you ensure citations are not fabricated?**
+
 模型被要求只使用检索编号；流式结束后用回答 claim 和来源文本做字符 bigram 对齐，生成 quote 和段落 locator；前端只展示被引用来源。它不是严格 NLI，仍可能错，所以有 Citation Precision/Chunk Support 和人工抽检。
+
+**EN:** The model is required to cite retrieval indices. After streaming, claims are aligned with source text using character-bigram overlap to produce quotes and paragraph locators; the frontend shows only cited sources. This is not strict NLI and can still be wrong, hence Citation Precision/Chunk Support and human review.
 
 **Q25：表格/跨段证据为什么容易失败？**
 
+**Q25 (EN): Why do tables and cross-paragraph evidence fail more often?**
+
 字符切分可能把表格行、表头、跨段句子切断；child 200 尤其容易。实际失败样本 q002/q004 就与表格/日期有关。下一步可以做表格感知切分、按标题切分或加大 child。
 
-### 7.5 记忆
+**EN:** Character-based splitting can cut table rows, headers and cross-paragraph sentences; child size 200 is especially vulnerable. Real failures q002/q004 are related to tables/dates. Future work includes table-aware splitting, heading-based splitting or a larger child size.
+
+### 7.5 记忆 / Memory
 
 **Q26：长期记忆怎么抽取？**
 
+**Q26 (EN): How is long-term memory extracted?**
+
 180 秒后台任务扫描未摘要消息，token 超过 400 才调用 LLM，一次提取 summary、semantic、episodic、procedural 和 user_profile；PostgreSQL 单事务写事实、版本、来源和消息标记，然后投影 Milvus。
+
+**EN:** A 180-second background job scans unsummarized messages. Only when the token count exceeds 400 does it call the LLM to extract summary, semantic, episodic and procedural memories plus a user profile. One PostgreSQL transaction writes facts, versions, provenance and message markers, then projects to Milvus.
 
 **Q27：记忆冲突怎么处理？**
 
+**Q27 (EN): How are memory conflicts handled?**
+
 新记忆与旧记忆做向量召回，相似度 ≥0.9 时旧记忆标 `superseded`，新记忆 `active`，不物理删除；版本表保留 `valid_from/valid_to/superseded_by`。0.9 是工程阈值，不是语义判断，可能误替换，后续可以接 LLM ADD/UPDATE/NOOP。
+
+**EN:** New memories are matched against old memories by vector recall. At similarity ≥0.9, the old memory becomes `superseded`, the new one becomes `active`, and nothing is physically deleted. The version table keeps `valid_from/valid_to/superseded_by`. 0.9 is an engineering threshold, not semantic judgment, so false supersede is possible; a future version can use LLM ADD/UPDATE/NOOP decisions.
 
 **Q28：删除记忆后还能被检索吗？**
 
+**Q28 (EN): Can a deleted memory still be retrieved?**
+
 正常情况下不能：PostgreSQL 软删除 + Milvus status 更新；即使 Milvus 更新失败，检索也会用 PostgreSQL active 集合过滤。极端情况下 reindex 前投影仍可能短暂不一致，所以要做回归测试。
+
+**EN:** Normally no: PostgreSQL soft-deletes and Milvus updates the status. Even if the Milvus update fails, retrieval filters against the PostgreSQL active set. In extreme cases the projection can be briefly inconsistent before reindex, so regression tests are needed.
 
 **Q29：记忆评测为什么是 0%？**
 
+**Q29 (EN): Why is the memory evaluation 0%?**
+
 当前 answer_eval 的问题集主要考知识库事实，没有触发跨会话记忆/个性化；`memory_used_rate` 记录为 0，不代表记忆功能没实现，而是评测没有覆盖。下一步要单独构造记忆召回、冲突、删除后检索的测试集。
+
+**EN:** The current answer_eval set mainly tests knowledge-base facts and does not trigger cross-session memory or personalization. A `memory_used_rate` of 0 means the evaluation did not cover memory, not that memory is unimplemented. A separate test set is needed for memory recall, conflicts and post-deletion retrieval.
 
 **Q30：多进程会不会重复提取记忆？**
 
+**Q30 (EN): Can multiple processes duplicate memory extraction?**
+
 会。每个进程都会启动 180 秒任务，当前没有 advisory lock / SKIP LOCKED。单进程演示没问题，多 worker 需要加锁或独立 worker。
 
-### 7.6 评测与实验
+**EN:** Yes. Every process starts the 180-second job, and there is no advisory lock or SKIP LOCKED. A single-process demo is fine; multi-worker deployment needs a lock or a dedicated worker.
+
+### 7.6 评测与实验 / Evaluation & Experiments
 
 **Q31：50 题够吗？**
 
+**Q31 (EN): Are 50 questions enough?**
+
 不够支撑很强的统计结论。我们用配对 bootstrap 报告 95% CI，并明确说明样本量限制；它适合做课程级对比和失败分析，不适合宣称“生产级最优”。
+
+**EN:** Not enough for strong statistical conclusions. We report paired-bootstrap 95% CIs and state the sample-size limitation. It is suitable for course-level comparison and failure analysis, not for claiming a production optimum.
 
 **Q32：gold_evidence 怎么生成？可靠吗？**
 
+**Q32 (EN): How is gold_evidence generated? Is it reliable?**
+
 用 `required_facts` 找源文档句子，找不到再用 `reference_answer` 做段落重叠匹配；`build_gold_evidence.py --check-only` 校验 quote 是否在源文档中。别名题 q047 曾误匹配到剧集标题，已修正为译名对照表；但自动标签仍建议人工抽检 10–15 条。
+
+**EN:** `required_facts` finds a sentence in the source document; if that fails, `reference_answer` is matched against paragraphs. `build_gold_evidence.py --check-only` validates that quotes exist in the source. The alias question q047 was once matched to an episode-title paragraph and has been corrected to the translation table, but auto labels still need 10–15 human spot checks.
 
 **Q33：93.5% 是当前模型的吗？**
 
+**Q33 (EN): Is 93.5% the current model's result?**
+
 不是。它是切换 OpenCode Go 前的 `qwen-plus` 生成 + `qwen-plus` Judge 历史基线；当前生成模型是 `deepseek-v4.1-flash`，必须重跑答案评测后才能对比。这个回答要主动说，不能把历史数字冒充当前结果。
+
+**EN:** No. It is a historical baseline generated and judged by `qwen-plus` before the OpenCode Go switch. The current generator is `deepseek-v4.1-flash`, and the answer evaluation must be rerun before comparison. State this proactively; do not present a historical number as the current result.
 
 **Q34：怎么复现实验？**
 
+**Q34 (EN): How can the experiment be reproduced?**
+
 `_meta.json` 记录 KB fingerprint、git sha、chunk 配置、模型、top_k、golden sha256、sample_count；`chunk_experiment.py` 为每个配置建独立 KB；`run_eval.py` 和 `answer_eval.py` 都写 meta。结果目录默认在 `evals/results/`，报告在 `docs/`。
+
+**EN:** `_meta.json` records the KB fingerprint, git SHA, chunk configuration, models, top_k, golden SHA-256 and sample count. `chunk_experiment.py` creates an independent KB per configuration, and both `run_eval.py` and `answer_eval.py` write meta. Results live under `evals/results/`, reports under `docs/`.
 
 **Q35：为什么答案评测用 LLM Judge？**
 
+**Q35 (EN): Why use an LLM judge for answer evaluation?**
+
 人工成本高，Judge 可以做规模化初筛；但 Judge 有偏差，所以同时保留确定性指标、Judge A/B 和人工抽检 CSV。历史 baseline 还是同源模型 judge，需要交叉验证。
 
-### 7.7 工程与安全
+**EN:** Human review is expensive; a judge scales the initial screening. Judges are biased, so we keep deterministic metrics, Judge A/B and a human-review CSV. The historical baseline used a same-family judge and still needs cross-validation.
+
+### 7.7 工程与安全 / Engineering & Security
 
 **Q36：没有登录，怎么上线？**
 
+**Q36 (EN): There is no login; how would you deploy this?**
+
 当前不能直接上线。最小改造是 JWT/OAuth 登录、从 token 推导 `user_id`、默认监听 127.0.0.1、CORS 白名单、per-user 限流；再做租户隔离和审计日志。
 
+**EN:** It cannot be deployed as-is. The minimum change is JWT/OAuth login, deriving `user_id` from the token, listening on 127.0.0.1 by default, a CORS allowlist and per-user rate limits; then add tenant isolation and audit logs.
+
 **Q37：最大的技术债是什么？**
+
+**Q37 (EN): What is the biggest technical debt?**
 
 按优先级：
 
@@ -777,51 +936,103 @@ child 检索没有拒答阈值，top-k 总会返回 chunk，所以“零召回�
 4. Alembic 迁移 + CI；
 5. 表格/标题感知切分。
 
+**EN:** By priority:
+
+1. authentication and tenant isolation;
+2. memory outbox / multi-worker lock;
+3. human review of gold_evidence and an answer-eval rerun;
+4. Alembic migrations + CI;
+5. table/heading-aware chunking.
+
 **Q38：如果给你两周，你先做什么？**
+
+**Q38 (EN): With two weeks, what would you do first?**
 
 先做认证 + 默认本机监听 + 分块默认值复核；再做 outbox 和记忆任务锁；最后补人工标签和答案评测。不会先加新功能。
 
+**EN:** Authentication, localhost-by-default and a review of the chunking default; then the outbox and memory-task lock; finally human labels and answer evaluation. I would not start by adding new features.
+
 **Q39：如果给你两个月呢？**
+
+**Q39 (EN): With two months?**
 
 加多租户、文档版本 `current/archived`、表格感知切分、记忆 LLM 冲突裁决、自动评测 CI、前端组件化，以及更大规模多领域语料。
 
+**EN:** Multi-tenancy, document versions `current/archived`, table-aware chunking, LLM memory-conflict resolution, automated evaluation CI, frontend componentization and a larger multi-domain corpus.
+
 **Q40：这个项目你最自豪的是什么？**
+
+**Q40 (EN): What are you most proud of in this project?**
 
 不是某个模型，而是把“文档入库—检索—引用—记忆—评测”做成了可运行、可解释、可复现的闭环，并且知道它的边界在哪里。
 
+**EN:** Not a particular model, but turning “ingestion—retrieval—citation—memory—evaluation” into a runnable, explainable and reproducible loop, while knowing where its boundaries are.
+
 **Q41：最遗憾的是什么？**
+
+**Q41 (EN): What do you regret most?**
 
 记忆能力没有专门评测，答案评测还没用当前 DeepSeek 重跑；另外安全边界和 outbox 还没做到生产级。
 
-### 7.8 容易被追问的“陷阱题”
+**EN:** Memory has no dedicated evaluation, the answer evaluation has not been rerun with the current DeepSeek model, and the security boundary and outbox are not production-grade.
+
+### 7.8 容易被追问的“陷阱题” / Likely Follow-up Traps
 
 **Q42：“你说 400/0 最好，那为什么不直接改默认？”**
 
+**Q42 (EN): “You say 400/0 is best; why not change the default?”**
+
 因为结论来自 50 题、child 检索层实验，不是答案质量实验；直接改默认可能过拟合。正确做法是先补答案评测和多语料，再决定。
+
+**EN:** Because the result comes from a 50-question, child-retrieval experiment, not an answer-quality experiment. Changing the default directly risks overfitting. The right move is answer evaluation and a larger corpus first.
 
 **Q43：“Recall 1.0 是不是说明检索没问题？”**
 
+**Q43 (EN): “Does Recall 1.0 mean retrieval has no problem?”**
+
 不是。旧 Recall 是文档级，饱和说明指标太粗；升级到证据级后 400/0 也只有 0.957，说明仍有边界失败。
+
+**EN:** No. The old Recall was document-level, and saturation means the metric was too coarse. At evidence level, even 400/0 reaches only 0.957, so boundary failures remain.
 
 **Q44：“Precision 0.3 是不是系统很差？”**
 
+**Q44 (EN): “Is Precision 0.3 a sign that the system is bad?”**
+
 Precision@5 分母固定为 5，而每题 gold evidence 通常只有 1–2 个 chunk；0.3–0.36 反映 top-5 里必然有相关但不等价的上下文，不等于答案正确率。要结合 Recall、nDCG 和答案评测看。
+
+**EN:** Precision@5 has a fixed denominator of 5, while each question usually has only 1–2 gold evidence chunks. A value of 0.3–0.36 reflects related but non-equivalent context in top-5; it is not answer correctness. Read it together with Recall, nDCG and answer evaluation.
 
 **Q45：“你的引用是模型自己编的吗？”**
 
+**Q45 (EN): “Are the citations fabricated by the model?”**
+
 编号是模型生成的，但 quote/locator 是从检索文本里对齐出来的；模型不能凭空产生来源文本。仍然可能选错 quote，所以有 Citation Precision/Chunk Support 和人工抽检。
+
+**EN:** The citation numbers are generated by the model, but quotes/locators are aligned from retrieved text; the model cannot invent source text. It can still choose the wrong quote, hence Citation Precision/Chunk Support and human review.
 
 **Q46：“为什么不用更大的模型？”**
 
+**Q46 (EN): “Why not use a larger model?”**
+
 课程环境更重视成本、延迟和可复现；当前 DeepSeek 已能支撑生成，瓶颈更多在检索、证据和评测。模型可以替换，架构不应绑死。
+
+**EN:** The course setting prioritizes cost, latency and reproducibility. The current DeepSeek model is sufficient for generation; the bottleneck is retrieval, evidence and evaluation. Models should be replaceable, and the architecture should not be tied to one.
 
 **Q47：“这个系统能处理多少文档？”**
 
+**Q47 (EN): “How many documents can this system handle?”**
+
 当前是 12 份 DOCX、50 题的课程规模；Milvus 分区和异步 IO 可以扩展，但上传/embedding/rerank 是主要瓶颈，后台任务也没有水平扩展锁。
+
+**EN:** The current scale is 12 DOCX files and 50 questions. Milvus partitions and async I/O can scale, but upload/embedding/rerank are the main bottlenecks, and background tasks have no horizontal-scaling lock.
 
 **Q48：“如果 Milvus 挂了怎么办？”**
 
+**Q48 (EN): “What happens if Milvus goes down?”**
+
 应用启动会失败；hybrid 检索会降级 dense，但 Milvus 整体不可用时无法检索。记忆检索在 PostgreSQL 校验失败时 fail-closed。生产需要重试、降级和健康检查。
+
+**EN:** Application startup fails. Hybrid retrieval can fall back to dense, but when Milvus is entirely unavailable there is no retrieval. Memory retrieval fails closed when the PostgreSQL check fails. Production needs retries, degradation and health checks.
 
 ---
 

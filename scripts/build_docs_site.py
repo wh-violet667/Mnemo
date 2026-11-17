@@ -206,6 +206,9 @@ def build_page(body_markdown: str) -> str:
       background: var(--surface); box-shadow: var(--shadow);
     }
     .content .question strong { color: var(--accent); }
+    .content .question-en { margin-top: -6px; color: var(--muted); font-size: .94rem; }
+    .content .question-en strong { color: var(--muted); }
+    .content .answer-en { color: var(--muted); }
     .content strong { color: var(--text); }
     .footer { margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: .84rem; }
     #toTop {
@@ -285,8 +288,13 @@ def build_page(body_markdown: str) -> str:
 <script>
   // 给 “Q1：...” 段落加左侧强调条，便于答辩时快速定位。
   document.querySelectorAll('main p > strong').forEach(function (strong) {
-    if (/^Q\\d+[：:]/.test(strong.textContent.trim())) {
+    const text = strong.textContent.trim();
+    if (/^Q\\d+[：:]/.test(text)) {
       strong.parentElement.classList.add('question');
+    } else if (/^Q\\d+ \\(EN\\):/.test(text)) {
+      strong.parentElement.classList.add('question-en');
+    } else if (text === 'EN:') {
+      strong.parentElement.classList.add('answer-en');
     }
   });
   // 目录链接在当前阅读位置高亮。
