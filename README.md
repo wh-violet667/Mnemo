@@ -283,6 +283,8 @@ docker compose ps
 
 默认端口：PostgreSQL `5432`，Redis `6379`。数据库名 `mnemo_db`，用户名/密码均为 `mnemo`。
 
+> Windows 的 WSL2 / Docker Desktop 通用安装步骤见 [`docs/windows-setup.md`](docs/windows-setup.md)；仓库不再包含修改本机 DISM/WSL 的管理员脚本。
+
 ### 2. 创建 Python 环境
 
 ```bash
@@ -514,6 +516,7 @@ Mnemo/
 │   ├── chunking-comparison.md    # 分块策略对比报告（脚本生成）
 │   ├── project-introduction.md   # 项目介绍与答辩问答
 │   ├── index.html                # GitHub Pages 静态页面
+│   ├── windows-setup.md          # Windows/WSL/Docker 通用安装说明
 │   └── phase1-agentic-lite.md   # Agentic-lite 设计与实现文档
 ├── data/
 │   ├── README.md                # 本地语料说明
@@ -535,10 +538,10 @@ Mnemo/
 │   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
 ├── tests/                       # pytest（97 个测试）
-├── scripts/                     # WSL/Docker 安装、Agentic 冒烟
-│   ├── 01-enable-wsl.*
-│   ├── 02-install-docker.ps1
-│   └── smoke_agentic.py
+├── scripts/                     # 网页生成、Agentic 冒烟
+│   ├── build_docs_site.py       # 从 Markdown 生成 GitHub Pages
+│   ├── smoke_agentic.py         # 真实模型 planner/critic 冒烟
+│   └── README.md
 ├── docker-compose.yml           # PostgreSQL + Redis Stack
 ├── .env.docker.example          # 环境变量模板
 └── LICENSE
