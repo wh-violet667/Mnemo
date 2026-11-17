@@ -1,0 +1,1176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mnemo · 项目介绍与答辩问答</title>
+  <meta name="description" content="Mnemo：基于知识库与长期记忆的个性化 RAG 助手。项目架构、核心组件、评测结果与老师追问回答。">
+  <meta property="og:title" content="Mnemo · 项目介绍与答辩问答">
+  <meta property="og:description" content="父子块检索、LangGraph Agent、PostgreSQL 长期记忆、证据级评测与分块实验。">
+  <meta property="og:type" content="article">
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-2: #f1f5f9;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #6d28d9;
+      --accent-2: #0ea5e9;
+      --accent-soft: #ede9fe;
+      --code-bg: #0f172a;
+      --code-text: #e2e8f0;
+      --hero-a: #0f172a;
+      --hero-b: #312e81;
+      --hero-c: #6d28d9;
+      --shadow: 0 12px 40px rgba(15, 23, 42, .08);
+      --radius: 16px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #070b17;
+        --surface: #0d1425;
+        --surface-2: #131c30;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --border: #253047;
+        --accent: #a78bfa;
+        --accent-2: #38bdf8;
+        --accent-soft: #21183f;
+        --code-bg: #020617;
+        --code-text: #dbeafe;
+        --shadow: 0 16px 50px rgba(0, 0, 0, .35);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      line-height: 1.78;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 64px 24px 46px;
+      color: #fff;
+      background:
+        radial-gradient(circle at 82% 18%, rgba(56, 189, 248, .28), transparent 30%),
+        radial-gradient(circle at 10% 80%, rgba(167, 139, 250, .28), transparent 34%),
+        linear-gradient(135deg, var(--hero-a), var(--hero-b) 55%, var(--hero-c));
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(to bottom, black, transparent 80%);
+      pointer-events: none;
+    }
+    .hero-inner { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; }
+    .kicker {
+      display: inline-flex; gap: 8px; align-items: center;
+      padding: 6px 12px; border: 1px solid rgba(255,255,255,.24);
+      border-radius: 999px; font-size: .82rem; letter-spacing: .08em;
+      text-transform: uppercase; color: rgba(255,255,255,.82);
+      background: rgba(255,255,255,.06);
+    }
+    h1 {
+      max-width: 900px; margin: 18px 0 14px;
+      font-size: clamp(2.2rem, 6vw, 4rem); line-height: 1.1;
+      letter-spacing: -.04em;
+    }
+    .lead { max-width: 850px; margin: 0; font-size: clamp(1rem, 2vw, 1.18rem); color: rgba(255,255,255,.82); }
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 0; }
+    .badges span {
+      padding: 5px 10px; border-radius: 999px; font-size: .78rem;
+      border: 1px solid rgba(255,255,255,.2);
+      background: rgba(255,255,255,.08); color: rgba(255,255,255,.9);
+    }
+    .stats {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px; max-width: 760px; margin: 30px 0 0;
+    }
+    .stat {
+      padding: 14px 16px; border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.16);
+      background: rgba(15, 23, 42, .28); backdrop-filter: blur(8px);
+    }
+    .stat strong { display: block; font-size: 1.55rem; line-height: 1.2; }
+    .stat span { display: block; margin-top: 2px; font-size: .78rem; color: rgba(255,255,255,.65); }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+    .button {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 16px; border-radius: 10px; font-weight: 600;
+      border: 1px solid rgba(255,255,255,.18); color: #fff;
+      background: rgba(255,255,255,.1);
+    }
+    .button.primary { color: #1e1b4b; background: #fff; border-color: #fff; }
+    .button:hover { text-decoration: none; transform: translateY(-1px); }
+    .layout {
+      display: grid; grid-template-columns: 250px minmax(0, 1fr);
+      gap: 40px; max-width: 1180px; margin: 0 auto; padding: 36px 24px 72px;
+    }
+    .sidebar { position: sticky; top: 22px; align-self: start; max-height: calc(100vh - 44px); overflow: auto; }
+    .side-title { margin: 0 0 10px; font-size: .75rem; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+    .sidebar nav { display: grid; gap: 2px; }
+    .sidebar nav a {
+      display: block; padding: 7px 10px; border-radius: 8px;
+      color: var(--muted); font-size: .88rem; line-height: 1.45;
+    }
+    .sidebar nav a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+    .sidebar nav a.active { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+    .side-links { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+    .side-links a { font-size: .84rem; color: var(--muted); }
+    .content { min-width: 0; }
+    .content h2 {
+      margin: 48px 0 18px; padding-top: 10px; border-top: 1px solid var(--border);
+      font-size: clamp(1.5rem, 3vw, 2.05rem); line-height: 1.3; letter-spacing: -.02em;
+    }
+    .content h2:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+    .content h3 { margin: 30px 0 12px; font-size: 1.2rem; line-height: 1.4; }
+    .content p { margin: 0 0 14px; }
+    .content ul, .content ol { padding-left: 1.35rem; margin: 0 0 16px; }
+    .content li { margin: 4px 0; }
+    .content blockquote {
+      margin: 18px 0; padding: 12px 16px; border-left: 4px solid var(--accent);
+      background: var(--accent-soft); border-radius: 0 10px 10px 0; color: var(--text);
+    }
+    .content blockquote p { margin: 0; }
+    .content hr { border: 0; border-top: 1px solid var(--border); margin: 34px 0; }
+    .table-wrap { overflow-x: auto; margin: 18px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+    .content table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 560px; }
+    .content th, .content td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    .content th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+    .content tr:last-child td { border-bottom: 0; }
+    .content code { padding: 2px 6px; border-radius: 5px; background: var(--surface-2); font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-size: .88em; }
+    .content pre { overflow-x: auto; padding: 16px; border-radius: 12px; background: var(--code-bg); color: var(--code-text); line-height: 1.6; }
+    .content pre code { padding: 0; background: transparent; color: inherit; font-size: .86em; }
+    .content .question {
+      margin: 26px 0 14px; padding: 12px 16px;
+      border-left: 4px solid var(--accent-2); border-radius: 0 10px 10px 0;
+      background: var(--surface); box-shadow: var(--shadow);
+    }
+    .content .question strong { color: var(--accent); }
+    .content strong { color: var(--text); }
+    .footer { margin-top: 54px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: .84rem; }
+    #toTop {
+      position: fixed; right: 22px; bottom: 22px; display: none;
+      width: 38px; height: 38px; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); box-shadow: var(--shadow);
+      cursor: pointer; font-size: 18px; z-index: 20;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; gap: 18px; padding-top: 20px; }
+      .sidebar { position: static; max-height: none; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+      .sidebar nav { display: flex; flex-wrap: wrap; gap: 4px; }
+      .sidebar nav a { padding: 6px 9px; background: var(--surface); border: 1px solid var(--border); }
+      .side-links { display: flex; flex-wrap: wrap; border-top: 0; padding-top: 0; margin-top: 10px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hero { padding-top: 44px; }
+    }
+    @media (max-width: 520px) {
+      .hero { padding: 36px 18px 30px; }
+      .layout { padding-left: 18px; padding-right: 18px; }
+      .stat strong { font-size: 1.25rem; }
+    }
+    @media print {
+      .hero { background: #fff; color: #000; padding: 10px 0; }
+      .hero::after, .sidebar, .hero-actions, .badges, .stats, #toTop { display: none; }
+      .layout { display: block; max-width: none; padding: 0; }
+      .content h2 { break-after: avoid; }
+      .content table, .content pre { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<header class="hero">
+  <div class="hero-inner">
+    <div class="kicker">Course Project · RAG + Long-term Memory</div>
+    <h1>Mnemo<br>项目介绍与答辩问答</h1>
+    <p class="lead">一个带长期记忆、可追溯引用的个性化 RAG 助手。文档进入父子块索引，LangGraph Agent 负责检索与生成，PostgreSQL 负责事实与版本，Milvus 负责可重建的检索投影。</p>
+    <div class="badges">
+      <span>FastAPI</span><span>LangGraph</span><span>Milvus</span>
+      <span>PostgreSQL</span><span>Redis</span><span>Streamlit</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><strong>97</strong><span>单元测试</span></div>
+      <div class="stat"><strong>50</strong><span>评测问题</span></div>
+      <div class="stat"><strong>0.957</strong><span>最佳 Recall@5</span></div>
+      <div class="stat"><strong>48</strong><span>答辩问答</span></div>
+    </div>
+    <div class="hero-actions">
+      <a class="button primary" href="https://github.com/wh-violet667/Mnemo">GitHub 仓库</a>
+      <a class="button" href="https://github.com/wh-violet667/Mnemo/blob/main/docs/project-introduction.md">Markdown 源文件</a>
+      <a class="button" href="https://github.com/wh-violet667/Mnemo#readme">README</a>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <p class="side-title">目录</p>
+    <nav>
+      <a href="#0">0. 一页速览</a>
+<a href="#1">1. 选题背景与目标</a>
+<a href="#2">2. 总体架构</a>
+<a href="#3">3. 核心组件详解</a>
+<a href="#4">4. 关键数据流</a>
+<a href="#5">5. 评测结果</a>
+<a href="#6">6. 工程边界与已知问题</a>
+<a href="#7">7. 老师可能问的问题与回答</a>
+<a href="#8">8. 演示建议</a>
+<a href="#9">9. 未来工作</a>
+<a href="#10">10. 总结</a>
+    </nav>
+    <div class="side-links">
+      <a href="https://github.com/wh-violet667/Mnemo">← 返回 GitHub 仓库</a>
+      <a href="https://github.com/wh-violet667/Mnemo/blob/main/docs/project-introduction.md">查看 Markdown 源文件</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <h2 id="0">0. 一页速览</h2>
+<h3 id="_1">一句话介绍</h3>
+<p>Mnemo 是一个面向个人/小团队知识库的 RAG 问答系统：文档经过父子块切分和向量化后进入 Milvus，用户提问时通过 hybrid 检索、rerank 和 LangGraph Agent 生成带证据引用的回答；同时把历史对话压缩成可版本化、可追溯来源的长期记忆，保存在 PostgreSQL，并投影到 Milvus 供语义召回。</p>
+<h3 id="_2">三个主要贡献</h3>
+<ol>
+<li><strong>可核验的 RAG 链路</strong>：父子块、dense + BM25、RRF、rerank、fast/auto/deep 检索、<code>[n]</code> 引用、claim 对齐 quote 和段落 locator，不是只把文档丢给大模型。</li>
+<li><strong>以 PostgreSQL 为事实源的长期记忆</strong>：摘要、语义/情节/程序记忆、版本历史、来源链、supersede 和索引状态都有明确数据模型；Milvus 只是可重建投影。</li>
+<li><strong>可复现的评测工程</strong>：50 题 golden set、<code>gold_evidence</code> 证据标签、Recall/MRR/Precision/nDCG、答案 Judge A/B、运行身份 fingerprint，以及独立 KB 的分块策略对比和配对 bootstrap。</li>
+</ol>
+<h3 id="_3">三个最需要诚实说明的边界</h3>
+<ol>
+<li><strong>当前是单用户演示</strong>：没有登录，<code>user_id</code> 由客户端传入，不能直接公开部署。</li>
+<li><strong>标签和评测仍有噪声</strong>：<code>gold_evidence</code> 主要是自动生成，需要人工抽检；答案评测的 93.5% 是切换 DeepSeek 前的 <code>qwen-plus</code> 历史基线。</li>
+<li><strong>跨存储仍是最终一致</strong>：文档入库和删除已经做了顺序/补偿，但还没有完整的 outbox worker；Milvus 投影失败仍可能需要 reindex。</li>
+</ol>
+<h3 id="_4">三个下一步</h3>
+<ol>
+<li>加认证与租户隔离，默认只监听本机。</li>
+<li>把分块实验扩展到答案质量和更多语料，再决定是否把默认 child 从 200/50 调到 400/0。</li>
+<li>补 10–15 条人工证据复核、CI、Alembic 迁移和 outbox。</li>
+</ol>
+<hr />
+<h2 id="1">1. 选题背景与目标</h2>
+<h3 id="11">1.1 要解决的问题</h3>
+<p>普通聊天模型有三个明显问题：</p>
+<ul>
+<li><strong>不知道私有资料</strong>：课程笔记、产品手册、政策文件不在训练数据里。</li>
+<li><strong>容易编造</strong>：模型可能给出看似合理但没有依据的答案。</li>
+<li><strong>没有持续记忆</strong>：每次对话都从零开始，无法记住用户偏好、历史决定和已确认事实。</li>
+</ul>
+<p>Mnemo 的目标不是训练一个新的大模型，而是围绕一个已有模型构建三层能力：</p>
+<ol>
+<li><strong>知识层</strong>：把文档变成可检索、可引用的证据。</li>
+<li><strong>记忆层</strong>：把对话变成可管理、可追溯的长期事实。</li>
+<li><strong>评测层</strong>：用固定问题集和证据标签证明检索/回答到底有没有变好。</li>
+</ol>
+<h3 id="12-rag">1.2 为什么是 RAG，而不是微调</h3>
+<ul>
+<li>课程/产品资料会更新，RAG 可以重新入库，不需要重新训练。</li>
+<li>微调更适合改变“表达风格/任务格式”，不适合注入大量事实。</li>
+<li>RAG 能返回来源，满足“可核验引用”的课程要求。</li>
+<li>本项目的数据规模只有 12 份 DOCX、50 道题，微调既容易过拟合，也无法证明引用能力。</li>
+</ul>
+<h3 id="13">1.3 项目的边界</h3>
+<p>它是一个<strong>课程级、单用户、可复现的工程原型</strong>，不是生产级 SaaS：</p>
+<ul>
+<li>单用户，无登录。</li>
+<li>语料规模小，评测集 50 题。</li>
+<li>依赖 OpenCode Go、DashScope、Zilliz 等外部服务。</li>
+<li>重点在架构、证据链和评测，不在模型训练或算法创新。</li>
+</ul>
+<hr />
+<h2 id="2">2. 总体架构</h2>
+<h3 id="21">2.1 分层结构</h3>
+<pre><code class="language-text">客户端
+  Streamlit :8501
+      │ HTTP / JSONL 流
+      ▼
+应用层
+  FastAPI :8010
+      │
+  LangGraph Agent
+      ├── search_knowledge_base
+      ├── get_memory
+      └── get_raw_conversation_by_summary_id
+      │
+数据层
+  PostgreSQL：事实源（用户、知识库、文件、父块、会话、记忆、版本、来源）
+  Milvus：检索投影（知识库子块、记忆）
+  Redis：LangGraph checkpoint、用户画像缓存
+      │
+外部服务
+  OpenCode Go / DeepSeek V4.1 Flash：对话生成
+  DashScope：text-embedding-v4、qwen3.7-text-rerank、Judge
+</code></pre>
+<h3 id="22">2.2 数据层分工</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>存储</th>
+<th>存什么</th>
+<th>为什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PostgreSQL</td>
+<td>用户、知识库、文件、父块、原始对话、摘要、记忆、版本、来源链</td>
+<td>事务、约束、可审计、可重建</td>
+</tr>
+<tr>
+<td>Milvus</td>
+<td>知识库子块向量 + BM25 稀疏向量、记忆检索投影</td>
+<td>高性能 dense/sparse 检索</td>
+</tr>
+<tr>
+<td>Redis</td>
+<td>LangGraph checkpoint、用户画像缓存</td>
+<td>会话上下文、低延迟读取</td>
+</tr>
+<tr>
+<td>本地文件系统</td>
+<td>上传临时文件</td>
+<td>解析前暂存，成功/失败后清理</td>
+</tr>
+</tbody>
+</table></div>
+<p>核心原则：<strong>PostgreSQL 是事实源，Milvus 是可重建的检索投影，Redis 是可过期的会话状态。</strong></p>
+<hr />
+<h2 id="3">3. 核心组件详解</h2>
+<h3 id="31-streamlit">3.1 Streamlit 前端</h3>
+<p>主要文件：<code>frontend/app.py</code>、<code>frontend/streaming.py</code></p>
+<p>职责：</p>
+<ul>
+<li>登录后的主界面：对话区、知识库面板、文件状态、记忆抽屉。</li>
+<li>通过 <code>requests</code> 读取 <code>/chat_with_agent/stream</code> 的逐行 JSON 事件。</li>
+<li>解析 <code>status</code>、<code>answer</code>、<code>trace</code>、<code>sources</code>、<code>error</code> 五类事件。</li>
+<li>来源卡片展示 <code>[n]</code>、文件名、quote、locator，而不是只显示文件名。</li>
+<li>对消息和来源内容做 <code>html.escape</code>，Markdown 使用 bleach 白名单，降低 XSS 风险。</li>
+<li>支持创建知识库、上传文件、查看 <code>processing / ready / failed</code>、删除文件/知识库、重命名会话、删除记忆。</li>
+</ul>
+<p>边界：</p>
+<ul>
+<li><code>MNEMO_USER_ID</code> 默认 1，仅适合单用户演示。</li>
+<li>前端是单文件为主，UI/CSS/状态耦合较重，后续应拆组件。</li>
+<li>流式请求失败时只能展示错误，不会自动重试整轮问答。</li>
+</ul>
+<h3 id="32-fastapi">3.2 FastAPI 接口层</h3>
+<p>主要文件：<code>backend/api.py</code></p>
+<p>主要端点：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>端点</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST /document_upload</code></td>
+<td>上传文档，流式写临时文件、计算 SHA-256、后台处理</td>
+</tr>
+<tr>
+<td><code>POST /knowledge-bases</code></td>
+<td>创建知识库</td>
+</tr>
+<tr>
+<td><code>GET /knowledge-bases</code></td>
+<td>列出用户知识库</td>
+</tr>
+<tr>
+<td><code>GET /knowledge-bases/{id}/files</code></td>
+<td>查看文件及状态</td>
+</tr>
+<tr>
+<td><code>DELETE /knowledge-bases/{id}</code></td>
+<td>删除知识库</td>
+</tr>
+<tr>
+<td><code>DELETE /knowledge-bases/{id}/documents/{hash}</code></td>
+<td>删除文件</td>
+</tr>
+<tr>
+<td><code>POST /conversations</code></td>
+<td>创建会话</td>
+</tr>
+<tr>
+<td><code>PATCH /conversations/{id}/knowledge-base</code></td>
+<td>切换会话知识库</td>
+</tr>
+<tr>
+<td><code>GET /chat_with_agent/stream</code></td>
+<td>流式问答</td>
+</tr>
+<tr>
+<td><code>GET /memories</code></td>
+<td>查看长期记忆</td>
+</tr>
+<tr>
+<td><code>DELETE /memories/{id}</code></td>
+<td>软删除记忆</td>
+</tr>
+<tr>
+<td><code>GET /runtime</code></td>
+<td>返回评测所需的运行时身份</td>
+</tr>
+</tbody>
+</table></div>
+<p>工程细节：</p>
+<ul>
+<li>上传有 200MB 限制、10 并发 semaphore、流式大小校验。</li>
+<li>支持按内容 SHA-256 去重；失败文件可以清理后重传。</li>
+<li><code>identifiers.py</code> 对知识库 ID 和文件哈希做白名单校验，Milvus filter 二次转义，避免表达式注入。</li>
+<li>文档入库的 PostgreSQL 写入是单事务；Milvus 在事务后写，失败会清理半成品并标记 <code>failed</code>。</li>
+<li>删除知识库/文件改为先删 Milvus、再删 PostgreSQL，避免“PG 已删、向量还在”的不可重试状态。</li>
+</ul>
+<h3 id="33-langgraph-agent">3.3 LangGraph Agent</h3>
+<p>主要文件：<code>backend/agent.py</code></p>
+<p>Agent 的职责不是“直接回答问题”，而是决定：</p>
+<ul>
+<li>要不要查知识库；</li>
+<li>要不要查长期记忆；</li>
+<li>要不要查原始对话；</li>
+<li>如何把工具结果组织成最终回答。</li>
+</ul>
+<p>三个工具：</p>
+<ol>
+<li><code>search_knowledge_base(query)</code>
+   调用检索管线，返回带编号的证据片段。</li>
+<li><code>get_memory(query, semantic_k, episodic_k, procedural_k)</code>
+   检索摘要/语义/情节/程序记忆。</li>
+<li><code>get_raw_conversation_by_summary_id(summary_id)</code>
+   在摘要不够详细时回查原始对话。</li>
+</ol>
+<p>中间件：</p>
+<ul>
+<li><code>ToolCallLimitMiddleware</code> 限制 <code>get_memory</code> 和 <code>search_knowledge_base</code> 的调用次数。</li>
+<li><code>SummarizationMiddleware</code> 处理长对话压缩。</li>
+<li><code>dynamic_prompt</code> 根据知识库类型注入不同系统提示词，并注入用户画像。</li>
+</ul>
+<p>会话状态：</p>
+<ul>
+<li><code>thread_id = user_id:conversation_id</code>。</li>
+<li>Redis checkpoint 默认 TTL 60 分钟，读取时刷新。</li>
+<li>不同会话互不共享上下文。</li>
+</ul>
+<p>为什么用 LangGraph：</p>
+<ul>
+<li>需要显式的工具调用循环，而不是一次 RAG chain。</li>
+<li>需要 checkpoint、会话恢复、流式事件和工具状态。</li>
+<li>需要限制工具调用次数，避免 Agent 无限检索。</li>
+</ul>
+<h3 id="34">3.4 检索管线</h3>
+<p>主要文件：<code>backend/retrieval.py</code>、<code>backend/routing.py</code>、<code>backend/knowledge_base_manager.py</code></p>
+<h4 id="fast-auto-deep">fast / auto / deep</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>模式</th>
+<th>行为</th>
+<th>适用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fast</code></td>
+<td>一次 hybrid 召回 + 回表 + rerank</td>
+<td>默认，延迟低</td>
+</tr>
+<tr>
+<td><code>auto</code></td>
+<td>规则判断是否需要 deep；fast 零召回时升级一次</td>
+<td>不确定问题复杂度</td>
+</tr>
+<tr>
+<td><code>deep</code></td>
+<td>Planner → Retrieve → Critic → Refine，最多 2–3 轮</td>
+<td>多跳、版本冲突、证据不足</td>
+</tr>
+</tbody>
+</table></div>
+<p>实际结果：在 violet 50 题上，deep/auto 没有提升 Recall/MRR，P95 反而增加约 4–5 倍；因此默认改成 <code>fast</code>。Agentic-lite 的价值主要是<strong>可控多轮轨迹和可观测性</strong>，不是已经被数据证明的质量提升。</p>
+<h4 id="hybrid">hybrid 检索</h4>
+<ul>
+<li>dense：<code>text-embedding-v4</code> 生成查询向量，Milvus COSINE。</li>
+<li>sparse：Milvus 内置 BM25，中文 analyzer。</li>
+<li>融合：<code>RRFRanker</code>，避免 dense/sparse 分数量纲不一致。</li>
+<li>失败降级：hybrid 失败时退回 dense。</li>
+</ul>
+<h4 id="rerank">rerank</h4>
+<ul>
+<li>使用 <code>qwen3.7-text-rerank</code> 对候选父块重新排序。</li>
+<li>失败时保持 RRF 顺序，不阻断回答。</li>
+<li>代价是多一次远程调用，P95 会增加；这也是为什么 <code>fast</code> 默认仍保留 rerank，但不再默认 deep。</li>
+</ul>
+<h4 id="_5">检索粒度</h4>
+<ul>
+<li><strong>child 200/50</strong> 是检索单元，存 Milvus。</li>
+<li><strong>parent 1000/200</strong> 是上下文单元，存 PostgreSQL。</li>
+<li>先召回 child，得到 <code>parent_id</code>，再回表取父块，最后统一 rerank。</li>
+</ul>
+<h3 id="35">3.5 文档入库与分块</h3>
+<p>主要文件：<code>backend/documents_process.py</code>、<code>backend/chunking.py</code></p>
+<p>流程：</p>
+<ol>
+<li>上传临时文件，计算 SHA-256。</li>
+<li>检查同用户、同知识库下是否已有文件。</li>
+<li>写 <code>file_metadata</code>，状态 <code>processing</code>。</li>
+<li>后台任务加载 PDF/DOCX。</li>
+<li>父块切分 → 子块切分。</li>
+<li>每个父块生成 UUID；每个子块记录 <code>parent_id</code>、<code>file_hash</code>、<code>file_name</code>。</li>
+<li>PostgreSQL 单事务写入：文件状态、父块、块哈希。</li>
+<li>Milvus 写入子块向量。</li>
+<li>成功写 <code>ready</code>；失败写 <code>failed</code>，并清理 PostgreSQL 半成品。</li>
+<li>重传失败文件时，先按 <code>file_hash</code> 清理旧 Milvus 向量和旧 PG 记录。</li>
+</ol>
+<p>默认配置：</p>
+<ul>
+<li>parent：1000 字符，overlap 200</li>
+<li>child：200 字符，overlap 50</li>
+<li>separators：<code>\n\n</code>、<code>\n</code>、<code>。</code>、<code>！</code>、<code>？</code>、<code>，</code>、<code>、</code>、空格、空串</li>
+</ul>
+<p>为什么父子块：</p>
+<ul>
+<li>子块小，向量表达更集中，召回更准。</li>
+<li>父块大，给模型足够上下文，避免“召回准但上下文碎”。</li>
+<li>代价是存储和回表成本更高。</li>
+</ul>
+<p>已知问题：</p>
+<ul>
+<li>表格可能被切断，<code>q002</code>、<code>q004</code> 这类题会受影响。</li>
+<li>当前是字符切分，不是 token 切分，也不是语义/标题切分。</li>
+<li>失败文件如果进程崩溃卡在 <code>processing</code>，还没有 watchdog。</li>
+</ul>
+<h3 id="36">3.6 存储模型</h3>
+<h4 id="postgresql">PostgreSQL 主要表</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>表</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>users</code></td>
+<td>用户与画像</td>
+</tr>
+<tr>
+<td><code>conversations</code></td>
+<td>会话</td>
+</tr>
+<tr>
+<td><code>knowledge_bases</code></td>
+<td>知识库</td>
+</tr>
+<tr>
+<td><code>file_metadata</code></td>
+<td>文件哈希、文件名、状态、错误</td>
+</tr>
+<tr>
+<td><code>parent_chunks</code></td>
+<td>父块原文</td>
+</tr>
+<tr>
+<td><code>chunk_hashes</code></td>
+<td>子块哈希</td>
+</tr>
+<tr>
+<td><code>raw_conversations</code></td>
+<td>原始对话消息</td>
+</tr>
+<tr>
+<td><code>summaries</code></td>
+<td>一次记忆压缩批次的摘要</td>
+</tr>
+<tr>
+<td><code>memories</code></td>
+<td>当前记忆事实</td>
+</tr>
+<tr>
+<td><code>memory_versions</code></td>
+<td>记忆版本历史</td>
+</tr>
+<tr>
+<td><code>memory_sources</code></td>
+<td>记忆到原始消息的来源链</td>
+</tr>
+</tbody>
+</table></div>
+<p>关键约束：</p>
+<ul>
+<li><code>file_metadata</code> 主键 <code>(file_hash, knowledge_base_id, user_id)</code>。</li>
+<li><code>parent_chunks</code>、<code>chunk_hashes</code> 外键指向 <code>file_metadata</code>，删除文件时级联。</li>
+<li><code>memories.source_summary_id</code> 外键指向 <code>summaries</code>。</li>
+<li><code>memory_versions</code> 外键指向 <code>memories</code>，只追加不覆盖。</li>
+<li><code>memory_sources</code> 记录记忆由哪些消息派生。</li>
+</ul>
+<h4 id="milvus">Milvus 集合</h4>
+<p>知识库集合字段：</p>
+<ul>
+<li><code>id</code>：自增主键</li>
+<li><code>user_id</code>：partition key</li>
+<li><code>knowledge_base_id</code></li>
+<li><code>file_hash</code></li>
+<li><code>parent_id</code></li>
+<li><code>text</code></li>
+<li><code>metadata</code>：JSON，含 <code>file_name</code>、<code>parent_index</code> 等</li>
+<li><code>dense_vector</code></li>
+<li><code>sparse_bm25</code></li>
+</ul>
+<p>记忆集合额外有：</p>
+<ul>
+<li><code>memory_type</code>：summary / semantic / episodic / procedural</li>
+<li><code>status</code>：active / superseded / deleted</li>
+<li><code>summary_id</code></li>
+<li><code>importance</code></li>
+<li><code>last_access_at</code></li>
+</ul>
+<h4 id="redis">Redis</h4>
+<ul>
+<li>LangGraph checkpoint：保存对话状态，支持多轮和恢复。</li>
+<li>用户画像缓存：减少每次 prompt 构造时的 PostgreSQL 查询。</li>
+</ul>
+<h3 id="37">3.7 长期记忆</h3>
+<p>主要文件：<code>backend/auto_store_memory_from_psql.py</code>、<code>backend/memory_manager.py</code>、<code>backend/reindex_memories.py</code></p>
+<h4 id="_6">记忆类型</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>类型</th>
+<th>内容</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>summary</td>
+<td>一次对话压缩后的摘要</td>
+<td>“用户在准备 RAG 课程项目”</td>
+</tr>
+<tr>
+<td>semantic</td>
+<td>事实/概念</td>
+<td>“用户偏好 Python”</td>
+</tr>
+<tr>
+<td>episodic</td>
+<td>历史事件</td>
+<td>“上次讨论过 Milvus 过滤”</td>
+</tr>
+<tr>
+<td>procedural</td>
+<td>步骤/方法</td>
+<td>“用户习惯先写测试再改代码”</td>
+</tr>
+</tbody>
+</table></div>
+<h4 id="_7">触发方式</h4>
+<ul>
+<li>后台任务每 180 秒运行一次。</li>
+<li>只处理未摘要消息。</li>
+<li>估算 token 超过 400 才调用 LLM 提取，避免每轮对话都产生记忆。</li>
+<li>一次提取写一个 summary、若干 memory、memory_version、memory_source。</li>
+</ul>
+<h4 id="_8">冲突与版本</h4>
+<ul>
+<li>新记忆先和旧记忆做向量候选召回。</li>
+<li>相似度 ≥ 0.9 时，旧记忆标记 <code>superseded</code>，新记忆 <code>active</code>，不删除旧内容。</li>
+<li>PostgreSQL 单事务写 summary、memory、version、source、消息 <code>summary_id</code> 和用户画像。</li>
+<li>事务提交后再投影 Milvus；失败标记 <code>index_status=failed</code>，用 <code>reindex_memories.py</code> 修复。</li>
+</ul>
+<h4 id="_9">删除记忆</h4>
+<ul>
+<li>PostgreSQL 先软删除，<code>memory_versions.valid_to</code> 关闭。</li>
+<li>Milvus 更新 <code>status=deleted</code>。</li>
+<li>检索时再用 PostgreSQL 的 <code>status='active'</code> 过滤 Milvus 返回的 ID；即使 Milvus 更新失败，已删除记忆也不会被返回。</li>
+</ul>
+<h4 id="_10">已知边界</h4>
+<ul>
+<li>0.9 阈值是工程 baseline，不是语义判断；相似但不同的事实可能被误 supersede。</li>
+<li>记忆评测基本为 0：当前 50 题没有覆盖“跨会话个性化/记忆冲突/记忆删除后检索”。</li>
+<li>后台任务没有跨进程锁，多 worker 可能重复抽取。</li>
+<li>被 LLM 过滤掉的消息不会写 <code>summary_id</code>，可能每个周期重复进入提取。</li>
+</ul>
+<h3 id="38">3.8 引用与可核验性</h3>
+<p>主要文件：<code>backend/citations.py</code></p>
+<p>流程：</p>
+<ol>
+<li>检索结果按 <code>[1]</code>、<code>[2]</code> 编号。</li>
+<li>模型回答里要求使用 <code>[n]</code> 标注来源。</li>
+<li>流式结束后，用回答中的 claim 和来源文本做字符 bigram 对齐，选出支持该 claim 的 quote。</li>
+<li>生成段落 locator（第几段）。</li>
+<li>前端来源卡片展示 <code>[n]</code>、文件名、quote、locator。</li>
+<li>只下发被引用到的来源，避免把 top-k 无关文档全塞给用户。</li>
+</ol>
+<p>边界：</p>
+<ul>
+<li>quote 选择是字符重叠启发式，不是严格 NLI/蕴含判断。</li>
+<li>引用精确率 98% 是历史 Judge 结果，不代表每个 quote 都人工核验。</li>
+<li>Chunk 支持率 78.1% 说明仍有约 1/5 的引用在 chunk 级支持不足。</li>
+<li>表格/跨段证据容易选错 quote。</li>
+</ul>
+<h3 id="39">3.9 评测体系</h3>
+<p>主要文件：<code>evals/</code> 目录</p>
+<h4 id="_11">检索评测</h4>
+<ul>
+<li><code>golden_violet.jsonl</code>：50 题，46 可回答 + 4 不可回答。</li>
+<li><code>gold_evidence</code>：每条证据带 <code>file / quote / start / end / fact</code>。</li>
+<li><code>run_eval.py</code>：</li>
+<li>有 <code>gold_evidence</code> 时按 quote 覆盖率判定相关；</li>
+<li>支持 <code>--granularity parent|child</code>；</li>
+<li>输出 Recall@k、MRR、Precision@k、nDCG@k、P50/P95、<code>best_evidence_overlap</code>。</li>
+<li><code>build_gold_evidence.py</code>：从 <code>required_facts</code> + <code>reference_answer</code> + 段落重叠生成证据标签。</li>
+<li><code>evidence.py</code>：quote 覆盖率、段落匹配、文件匹配。</li>
+</ul>
+<h4 id="_12">答案评测</h4>
+<ul>
+<li><code>answer_eval.py</code> 调用真实 <code>/chat_with_agent/stream</code>。</li>
+<li>Judge A：对照 <code>reference_answer</code> / <code>required_facts</code> 的 0/1/2 正确性。</li>
+<li>Judge B：claim 级忠实度 + <code>[n]</code> 引用支持。</li>
+<li>确定性指标：Hit@5、ExpectedContextCoverage、Citation Precision、Refusal Accuracy。</li>
+<li>历史结果：56 条，完全正确率 93.5%，忠实度 97.6%，拒答准确率 100%。</li>
+<li><strong>注意</strong>：93.5% 是切换 OpenCode Go 前的 <code>qwen-plus</code> 生成 + <code>qwen-plus</code> judge 历史基线，不是当前 DeepSeek 的结果；需要重跑。</li>
+</ul>
+<h4 id="_13">分块实验</h4>
+<ul>
+<li><code>chunk_experiment.py</code> 为每个配置建独立 KB、重新上传、跑 <code>run_eval</code>。</li>
+<li>默认三组：child 200/0、200/50、400/0。</li>
+<li>相对基线做配对 bootstrap 95% CI。</li>
+<li>生成 <code>docs/chunking-comparison.md</code>，包括指标、CI、hit/miss 翻转、基线未命中。</li>
+</ul>
+<h4 id="_14">运行身份</h4>
+<p>每次评测写 <code>_meta.json</code>：</p>
+<ul>
+<li>KB 文件 fingerprint</li>
+<li>git sha + dirty</li>
+<li>chunk 配置</li>
+<li>模型名</li>
+<li>top_k</li>
+<li>golden sha256</li>
+<li>sample_count</li>
+</ul>
+<p>这样不同 run 不会在不知情的情况下被拼在一起。</p>
+<hr />
+<h2 id="4">4. 关键数据流</h2>
+<h3 id="41">4.1 文档入库</h3>
+<pre><code class="language-text">Streamlit 上传
+  → FastAPI 校验类型/大小/知识库 ID
+  → 流式写临时文件 + SHA-256
+  → 查 file_metadata 状态
+      ├─ ready/processing：按重复处理
+      └─ failed：清旧向量 + 清旧 PG 记录，重新入库
+  → 写 processing
+  → BackgroundTask
+  → 解析 DOCX/PDF
+  → parent/child split
+  → PostgreSQL 单事务（file_metadata + parent_chunks + chunk_hashes）
+  → Milvus 写 child vectors
+  → ready / failed
+</code></pre>
+<h3 id="42">4.2 问答</h3>
+<pre><code class="language-text">Streamlit
+  → GET /chat_with_agent/stream
+  → FastAPI ensure_conversation / 标题 / KB
+  → LangGraph Agent
+      ├─ 需要知识库：search_knowledge_base
+      │     → hybrid child 召回
+      │     → PostgreSQL 回表 parent
+      │     → rerank
+      │     → 编号 + sources
+      ├─ 需要记忆：get_memory
+      │     → Milvus 记忆召回
+      │     → PostgreSQL active 校验
+      └─ 需要原文：get_raw_conversation_by_summary_id
+  → LLM 生成
+  → claim/quote 对齐
+  → sources 事件
+  → BackgroundTask 保存 raw_conversations
+</code></pre>
+<h3 id="43">4.3 记忆</h3>
+<pre><code class="language-text">raw_conversations
+  → 180s 后台任务
+  → 未摘要消息 + token &gt; 400
+  → LLM 提取 summary / semantic / episodic / procedural / profile
+  → Milvus 找 supersede 候选
+  → PostgreSQL 单事务写 summary、memory、version、source、消息 summary_id、画像
+  → Milvus 投影
+      ├─ 成功：index_status=indexed
+      └─ 失败：index_status=failed → reindex_memories.py
+</code></pre>
+<h3 id="44">4.4 评测</h3>
+<pre><code class="language-text">seed_violet_kb.py
+  → 上传 12 份 DOCX 到指定 KB
+run_eval.py
+  → 固定 golden + top_k + 检索模式
+  → 逐题检索
+  → evidence 覆盖率判定
+  → Recall/MRR/Precision/nDCG + 延迟
+chunk_experiment.py
+  → 多配置独立 KB
+  → run_eval × N
+  → 配对 bootstrap + 翻转样本
+  → docs/chunking-comparison.md
+</code></pre>
+<hr />
+<h2 id="5">5. 评测结果</h2>
+<h3 id="51">5.1 旧的检索结果</h3>
+<p>在旧的文档级标签下，50 题、top_k=5 时 Recall@5 达到 1.000，MRR 约 0.83–0.85。问题是：</p>
+<ul>
+<li>标签只要求命中“正确文件”的任意父块；</li>
+<li>Recall 饱和，无法区分 chunking；</li>
+<li>不能说明证据位置是否正确。</li>
+</ul>
+<p>因此后来补了 <code>gold_evidence</code>，把评测从“文档级”升级为“证据级”。</p>
+<h3 id="52">5.2 分块策略真实结果</h3>
+<p>实验设置：</p>
+<ul>
+<li>12 份 DOCX</li>
+<li>同一 <code>text-embedding-v4</code> / <code>qwen3.7-text-rerank</code></li>
+<li>50 题，child 级检索，<code>top_k=5</code>，<code>hybrid+rerank</code></li>
+<li>每个配置独立 KB</li>
+<li>46 条可回答样本参与 Recall/MRR/Precision/nDCG</li>
+</ul>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>策略</th>
+<th style="text-align: right;">Recall@5</th>
+<th style="text-align: right;">MRR</th>
+<th style="text-align: right;">Precision@5</th>
+<th style="text-align: right;">nDCG@5</th>
+<th style="text-align: right;">P50 / P95</th>
+<th style="text-align: right;">子块数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>child 200/0</td>
+<td style="text-align: right;">0.848</td>
+<td style="text-align: right;">0.670</td>
+<td style="text-align: right;">0.300</td>
+<td style="text-align: right;">0.700</td>
+<td style="text-align: right;">2870 / 5777 ms</td>
+<td style="text-align: right;">321</td>
+</tr>
+<tr>
+<td>child 200/50</td>
+<td style="text-align: right;">0.913</td>
+<td style="text-align: right;">0.715</td>
+<td style="text-align: right;">0.330</td>
+<td style="text-align: right;">0.749</td>
+<td style="text-align: right;">3146 / 5577 ms</td>
+<td style="text-align: right;">352</td>
+</tr>
+<tr>
+<td>child 400/0</td>
+<td style="text-align: right;"><strong>0.957</strong></td>
+<td style="text-align: right;"><strong>0.765</strong></td>
+<td style="text-align: right;"><strong>0.357</strong></td>
+<td style="text-align: right;"><strong>0.811</strong></td>
+<td style="text-align: right;"><strong>2683 / 3625 ms</strong></td>
+<td style="text-align: right;"><strong>164</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>相对 200/0 的配对 bootstrap 95% CI：</p>
+<ul>
+<li>400/0：ΔRecall <strong>+0.109</strong>（+0.022~+0.217）、ΔPrecision <strong>+0.057</strong>（+0.017~+0.100）、ΔnDCG <strong>+0.111</strong>（+0.028~+0.196）；MRR 区间跨 0。</li>
+<li>200/50：ΔRecall +0.065（-0.022~+0.153）、ΔnDCG +0.049（-0.027~+0.133），不显著。</li>
+</ul>
+<p>结论：本次语料上 <strong>400 字非重叠 child</strong> 在检索指标和延迟上都最好；但这是 50 题、检索层的结论，不能直接说明答案质量最好。生产默认仍是 200/50，下一步应该用答案评测和更大语料复核，而不是只凭一次 50 题实验改默认。</p>
+<h3 id="53">5.3 答案评测</h3>
+<p>历史答案评测：56 条（46 可回答 + 10 不可回答），<code>qwen-plus</code> 生成 + <code>qwen-plus</code> Judge：</p>
+<ul>
+<li>完全正确率 93.5%</li>
+<li>忠实度（strict）97.6%</li>
+<li>引用有效率 / 精确率 / 覆盖率 98.8% / 98.0% / 94.3%</li>
+<li>Chunk 支持率 78.1%</li>
+<li>拒答准确率 100%</li>
+<li>误拒率 4.3%</li>
+</ul>
+<p>这组数字的边界：</p>
+<ul>
+<li>是旧模型/旧配置的历史基线，不是当前 DeepSeek 的结果；</li>
+<li>生成和 Judge 同源，可能有自偏好；</li>
+<li>56 条样本的 95% CI 约 ±10pp；</li>
+<li>人工复核表仍需要填写。</li>
+</ul>
+<h3 id="54">5.4 结果怎么读</h3>
+<ul>
+<li>Recall 高不等于上下文干净：Precision@5 只有 0.30–0.36。</li>
+<li>400/0 的收益主要来自“更少的块 + 更完整的证据”，但大块也可能带入噪声。</li>
+<li>200/50 的 overlap 有正向趋势，但区间跨 0，不能过度解读。</li>
+<li>不可回答样本 clean rate 为 0%，因为 child 检索没有拒答阈值；这不是 chunking 差异。</li>
+<li>真正影响答辩可信度的是：证据标签质量、答案评测是否重跑、是否承认 50 题样本的波动。</li>
+</ul>
+<hr />
+<h2 id="6">6. 工程边界与已知问题</h2>
+<h3 id="61">6.1 安全</h3>
+<ul>
+<li>没有登录/鉴权，<code>user_id</code> 由客户端传入。</li>
+<li>默认监听 <code>0.0.0.0</code>，CORS 允许任意来源。</li>
+<li>只适合本机单用户演示，不能直接公开部署。</li>
+<li>这是当前最大的 P0。</li>
+</ul>
+<h3 id="62">6.2 数据一致性</h3>
+<ul>
+<li>文档入库已做 PostgreSQL 单事务 + Milvus 后写 + 失败清理。</li>
+<li>删除知识库/文件已改为先删 Milvus、再删 PG，失败可重试。</li>
+<li>记忆删除用 PostgreSQL active 过滤兜底。</li>
+<li>但还没有完整 outbox：Milvus 投影失败仍需要 reindex。</li>
+<li>后台任务没有跨进程锁，多 worker 可能重复抽取。</li>
+</ul>
+<h3 id="63">6.3 评测</h3>
+<ul>
+<li><code>gold_evidence</code> 主要是自动生成，需要人工抽检。</li>
+<li>50 题、12 份文档，规模小，bootstrap 区间可能较宽。</li>
+<li>答案评测 93.5% 是历史基线，需要按当前模型重跑。</li>
+<li>记忆能力没有专门评测集。</li>
+<li>没有 CI 和数据库迁移系统。</li>
+</ul>
+<h3 id="64">6.4 功能</h3>
+<ul>
+<li>表格/跨段证据容易切碎。</li>
+<li>版本冲突只靠提示词和检索，没有文档 <code>status=current/archived</code> 元数据。</li>
+<li>前端仍是单文件为主。</li>
+<li>单用户，没有多租户。</li>
+</ul>
+<hr />
+<h2 id="7">7. 老师可能问的问题与回答</h2>
+<h3 id="71">7.1 选题与创新</h3>
+<p><strong>Q1：这个项目和普通 ChatGPT 有什么区别？</strong></p>
+<p>普通 ChatGPT 不知道私有资料，也不能保证引用。Mnemo 把文档切块、向量化、检索、rerank、引用、长期记忆和评测串成一条完整链路；回答必须尽量落在检索证据上，并且能展开来源。</p>
+<p><strong>Q2：创新点是什么？是不是只是套 RAG？</strong></p>
+<p>不是算法创新，而是工程和证据链创新：</p>
+<ol>
+<li>父子块 + hybrid + rerank + Agentic-lite 的完整检索链路；</li>
+<li>PostgreSQL 作为记忆事实源，Milvus 只是可重建投影；</li>
+<li>claim 对齐 quote + locator 的可核验引用；</li>
+<li>证据级评测 + 独立 KB 分块对比 + 配对 bootstrap。</li>
+</ol>
+<p>如果老师追问“有没有新算法”，要诚实回答：没有提出新模型或新检索算法，主要贡献是把多个工程组件做成可运行、可评测、可解释的系统。</p>
+<p><strong>Q3：为什么不做微调？</strong></p>
+<p>资料会更新，微调成本高且不能返回来源；50 题/12 份文档也不足以支撑微调。RAG 更适合“私有事实 + 可引用 + 可更新”的场景。</p>
+<p><strong>Q4：目标用户是谁？</strong></p>
+<p>课程/个人知识库、产品手册问答、政策文件查询等“资料私有、需要引用、需要记住用户偏好”的场景。当前实现是单用户原型。</p>
+<h3 id="72">7.2 架构与选型</h3>
+<p><strong>Q5：为什么用 FastAPI + Streamlit？</strong></p>
+<p>FastAPI 适合异步 IO、流式响应和依赖注入；Streamlit 能用最短时间做出可交互 Demo。生产环境可以把前端换成 React，但课程项目更看重端到端可运行。</p>
+<p><strong>Q6：为什么用 LangGraph，不用普通 LangChain chain？</strong></p>
+<p>因为需要工具调用循环、会话 checkpoint、流式事件和工具次数限制。普通 chain 更适合固定流水线，Agent 需要状态和分支。</p>
+<p><strong>Q7：为什么同时用 PostgreSQL、Milvus、Redis，是否过度设计？</strong></p>
+<p>三者职责不同：</p>
+<ul>
+<li>PostgreSQL 负责事实、事务、版本和来源；</li>
+<li>Milvus 负责向量/BM25 检索；</li>
+<li>Redis 负责会话 checkpoint 和缓存。</li>
+</ul>
+<p>如果只用向量库，记忆版本、来源链、事务和审计很难做；如果只用 PostgreSQL，向量检索性能不够。代价是跨存储一致性，需要额外设计。</p>
+<p><strong>Q8：为什么用父子块，不直接用一种块？</strong></p>
+<p>子块小，召回准；父块大，给模型足够上下文。只用子块会导致上下文碎片化，只用父块会让向量表达被稀释。代价是存储和回表成本。</p>
+<p><strong>Q9：为什么 hybrid，不只用向量？</strong></p>
+<p>dense 擅长语义相似，BM25 擅长专有名词、数字、别名和精确匹配。RRF 融合两者的排名，不需要调分数纲。失败时还能降级到 dense。</p>
+<p><strong>Q10：为什么还要 rerank？</strong></p>
+<p>召回阶段追求 recall，排序阶段追求 precision。rerank 能用更贵的交叉编码模型重排 top 候选，提高 MRR/证据位置；代价是延迟。</p>
+<p><strong>Q11：为什么对话、embedding、rerank 用不同服务？</strong></p>
+<p>对话模型需要生成质量和成本平衡；embedding 需要中文语义能力；rerank 需要 Cross-Encoder 式的相关性判断。分开选型更灵活，也避免一个服务绑定所有能力。</p>
+<h3 id="73">7.3 数据与一致性</h3>
+<p><strong>Q12：文档上传后到底经历了什么？</strong></p>
+<p>校验 → 临时文件 + SHA-256 → 查重/状态 → 写 processing → 后台解析 → 父子块 → PostgreSQL 单事务 → Milvus 子块向量 → ready/failed。失败会清理半成品，重传会先清理旧投影。</p>
+<p><strong>Q13：PostgreSQL 和 Milvus 怎么保持一致？</strong></p>
+<p>PostgreSQL 是事实源；Milvus 是投影。文档入库先提交 PostgreSQL，再写 Milvus；Milvus 失败会清理 PG 半成品并标记 failed。记忆写入也是先 PG 事务，再投影 Milvus，失败标记 <code>index_status=failed</code>，用 reindex 修复。当前没有完整 outbox，这是下一步。</p>
+<p><strong>Q14：删除知识库/文件为什么先删 Milvus？</strong></p>
+<p>如果先删 PostgreSQL，Milvus 失败后会留下孤儿向量，而且 API 重试会 404，无法清理。先删 Milvus，失败时 PostgreSQL 还在，用户可以重试；成功后再删 PG。代价是 PG 删除失败时元数据还在，但可重试。</p>
+<p><strong>Q15：删除记忆为什么用 PostgreSQL 过滤？</strong></p>
+<p>Milvus 的 <code>status=deleted</code> 更新可能失败。检索时用 PostgreSQL 的 <code>status='active'</code> 校验 Milvus 返回的 ID，失败就按空结果处理，避免已删除记忆继续进入回答。</p>
+<p><strong>Q16：重复上传怎么判断？</strong></p>
+<p>用文件内容 SHA-256 + 知识库 + 用户判断。<code>ready/processing</code> 视为重复；<code>failed</code> 允许清理旧记录后重传。</p>
+<p><strong>Q17：多用户隔离怎么做的？</strong></p>
+<p>数据模型和 Milvus filter 都有 <code>user_id</code>，但当前 <code>user_id</code> 由客户端传入，没有认证，所以只是“逻辑隔离”，不是安全隔离。公开部署前必须加登录和 token。</p>
+<h3 id="74">7.4 检索与生成</h3>
+<p><strong>Q18：fast/auto/deep 的区别？为什么 deep 没提升还保留？</strong></p>
+<p>fast 一次检索；auto 规则路由/零召回升级；deep 做 Plan/Retrieve/Critique/Refine。violet 50 题上 deep/auto 没提升 Recall/MRR，P95 反而高 4–5 倍，所以默认 fast。保留 deep 是为了多跳/版本冲突场景和可观测性，不是为了刷分。</p>
+<p><strong>Q19：为什么旧的 Recall@5 是 1.000，现在只有 0.848？</strong></p>
+<p>旧标签是文档级：命中正确文件的任意父块就算对。新标签是证据级：要覆盖 gold evidence quote。后者更严格，所以数字下降是预期，不是系统变差。</p>
+<p><strong>Q20：为什么 Precision 只有 0.30–0.36？</strong></p>
+<p>top_k=5 里通常只有 1–2 个 chunk 覆盖证据，其他是相关但不等价的上下文；Precision@5 分母固定为 5，所以天然偏低。它反映“上下文干净程度”，不等于答案正确率。</p>
+<p><strong>Q21：400/0 最好，为什么默认还是 200/50？</strong></p>
+<p>400/0 是 50 题、child 检索层的实验结果，回答质量和更大语料还没验证；直接改默认有过拟合风险。正确做法是补答案评测和多语料复核，再决定是否切换。这个回答能体现你知道“实验结论的适用范围”。</p>
+<p><strong>Q22：为什么 200/50 的提升不显著？</strong></p>
+<p>ΔRecall +0.065，95% CI -0.022~+0.153，跨 0；50 题样本量小，overlap 的收益可能被题目差异淹没。不能只看均值，要看区间和效应量。</p>
+<p><strong>Q23：不可回答样本 clean rate 0% 怎么解释？</strong></p>
+<p>child 检索没有拒答阈值，top-k 总会返回 chunk，所以“零召回”不适用。真正的拒答在答案层由 prompt 和 Judge 评估；检索层这项只能说明缺少阈值，不是 chunking 的锅。</p>
+<p><strong>Q24：引用是怎么保证不是编的？</strong></p>
+<p>模型被要求只使用检索编号；流式结束后用回答 claim 和来源文本做字符 bigram 对齐，生成 quote 和段落 locator；前端只展示被引用来源。它不是严格 NLI，仍可能错，所以有 Citation Precision/Chunk Support 和人工抽检。</p>
+<p><strong>Q25：表格/跨段证据为什么容易失败？</strong></p>
+<p>字符切分可能把表格行、表头、跨段句子切断；child 200 尤其容易。实际失败样本 q002/q004 就与表格/日期有关。下一步可以做表格感知切分、按标题切分或加大 child。</p>
+<h3 id="75">7.5 记忆</h3>
+<p><strong>Q26：长期记忆怎么抽取？</strong></p>
+<p>180 秒后台任务扫描未摘要消息，token 超过 400 才调用 LLM，一次提取 summary、semantic、episodic、procedural 和 user_profile；PostgreSQL 单事务写事实、版本、来源和消息标记，然后投影 Milvus。</p>
+<p><strong>Q27：记忆冲突怎么处理？</strong></p>
+<p>新记忆与旧记忆做向量召回，相似度 ≥0.9 时旧记忆标 <code>superseded</code>，新记忆 <code>active</code>，不物理删除；版本表保留 <code>valid_from/valid_to/superseded_by</code>。0.9 是工程阈值，不是语义判断，可能误替换，后续可以接 LLM ADD/UPDATE/NOOP。</p>
+<p><strong>Q28：删除记忆后还能被检索吗？</strong></p>
+<p>正常情况下不能：PostgreSQL 软删除 + Milvus status 更新；即使 Milvus 更新失败，检索也会用 PostgreSQL active 集合过滤。极端情况下 reindex 前投影仍可能短暂不一致，所以要做回归测试。</p>
+<p><strong>Q29：记忆评测为什么是 0%？</strong></p>
+<p>当前 answer_eval 的问题集主要考知识库事实，没有触发跨会话记忆/个性化；<code>memory_used_rate</code> 记录为 0，不代表记忆功能没实现，而是评测没有覆盖。下一步要单独构造记忆召回、冲突、删除后检索的测试集。</p>
+<p><strong>Q30：多进程会不会重复提取记忆？</strong></p>
+<p>会。每个进程都会启动 180 秒任务，当前没有 advisory lock / SKIP LOCKED。单进程演示没问题，多 worker 需要加锁或独立 worker。</p>
+<h3 id="76">7.6 评测与实验</h3>
+<p><strong>Q31：50 题够吗？</strong></p>
+<p>不够支撑很强的统计结论。我们用配对 bootstrap 报告 95% CI，并明确说明样本量限制；它适合做课程级对比和失败分析，不适合宣称“生产级最优”。</p>
+<p><strong>Q32：gold_evidence 怎么生成？可靠吗？</strong></p>
+<p>用 <code>required_facts</code> 找源文档句子，找不到再用 <code>reference_answer</code> 做段落重叠匹配；<code>build_gold_evidence.py --check-only</code> 校验 quote 是否在源文档中。别名题 q047 曾误匹配到剧集标题，已修正为译名对照表；但自动标签仍建议人工抽检 10–15 条。</p>
+<p><strong>Q33：93.5% 是当前模型的吗？</strong></p>
+<p>不是。它是切换 OpenCode Go 前的 <code>qwen-plus</code> 生成 + <code>qwen-plus</code> Judge 历史基线；当前生成模型是 <code>deepseek-v4.1-flash</code>，必须重跑答案评测后才能对比。这个回答要主动说，不能把历史数字冒充当前结果。</p>
+<p><strong>Q34：怎么复现实验？</strong></p>
+<p><code>_meta.json</code> 记录 KB fingerprint、git sha、chunk 配置、模型、top_k、golden sha256、sample_count；<code>chunk_experiment.py</code> 为每个配置建独立 KB；<code>run_eval.py</code> 和 <code>answer_eval.py</code> 都写 meta。结果目录默认在 <code>evals/results/</code>，报告在 <code>docs/</code>。</p>
+<p><strong>Q35：为什么答案评测用 LLM Judge？</strong></p>
+<p>人工成本高，Judge 可以做规模化初筛；但 Judge 有偏差，所以同时保留确定性指标、Judge A/B 和人工抽检 CSV。历史 baseline 还是同源模型 judge，需要交叉验证。</p>
+<h3 id="77">7.7 工程与安全</h3>
+<p><strong>Q36：没有登录，怎么上线？</strong></p>
+<p>当前不能直接上线。最小改造是 JWT/OAuth 登录、从 token 推导 <code>user_id</code>、默认监听 127.0.0.1、CORS 白名单、per-user 限流；再做租户隔离和审计日志。</p>
+<p><strong>Q37：最大的技术债是什么？</strong></p>
+<p>按优先级：</p>
+<ol>
+<li>认证与租户隔离；</li>
+<li>记忆 outbox / 多 worker 锁；</li>
+<li>gold_evidence 人工复核和答案评测重跑；</li>
+<li>Alembic 迁移 + CI；</li>
+<li>表格/标题感知切分。</li>
+</ol>
+<p><strong>Q38：如果给你两周，你先做什么？</strong></p>
+<p>先做认证 + 默认本机监听 + 分块默认值复核；再做 outbox 和记忆任务锁；最后补人工标签和答案评测。不会先加新功能。</p>
+<p><strong>Q39：如果给你两个月呢？</strong></p>
+<p>加多租户、文档版本 <code>current/archived</code>、表格感知切分、记忆 LLM 冲突裁决、自动评测 CI、前端组件化，以及更大规模多领域语料。</p>
+<p><strong>Q40：这个项目你最自豪的是什么？</strong></p>
+<p>不是某个模型，而是把“文档入库—检索—引用—记忆—评测”做成了可运行、可解释、可复现的闭环，并且知道它的边界在哪里。</p>
+<p><strong>Q41：最遗憾的是什么？</strong></p>
+<p>记忆能力没有专门评测，答案评测还没用当前 DeepSeek 重跑；另外安全边界和 outbox 还没做到生产级。</p>
+<h3 id="78">7.8 容易被追问的“陷阱题”</h3>
+<p><strong>Q42：“你说 400/0 最好，那为什么不直接改默认？”</strong></p>
+<p>因为结论来自 50 题、child 检索层实验，不是答案质量实验；直接改默认可能过拟合。正确做法是先补答案评测和多语料，再决定。</p>
+<p><strong>Q43：“Recall 1.0 是不是说明检索没问题？”</strong></p>
+<p>不是。旧 Recall 是文档级，饱和说明指标太粗；升级到证据级后 400/0 也只有 0.957，说明仍有边界失败。</p>
+<p><strong>Q44：“Precision 0.3 是不是系统很差？”</strong></p>
+<p>Precision@5 分母固定为 5，而每题 gold evidence 通常只有 1–2 个 chunk；0.3–0.36 反映 top-5 里必然有相关但不等价的上下文，不等于答案正确率。要结合 Recall、nDCG 和答案评测看。</p>
+<p><strong>Q45：“你的引用是模型自己编的吗？”</strong></p>
+<p>编号是模型生成的，但 quote/locator 是从检索文本里对齐出来的；模型不能凭空产生来源文本。仍然可能选错 quote，所以有 Citation Precision/Chunk Support 和人工抽检。</p>
+<p><strong>Q46：“为什么不用更大的模型？”</strong></p>
+<p>课程环境更重视成本、延迟和可复现；当前 DeepSeek 已能支撑生成，瓶颈更多在检索、证据和评测。模型可以替换，架构不应绑死。</p>
+<p><strong>Q47：“这个系统能处理多少文档？”</strong></p>
+<p>当前是 12 份 DOCX、50 题的课程规模；Milvus 分区和异步 IO 可以扩展，但上传/embedding/rerank 是主要瓶颈，后台任务也没有水平扩展锁。</p>
+<p><strong>Q48：“如果 Milvus 挂了怎么办？”</strong></p>
+<p>应用启动会失败；hybrid 检索会降级 dense，但 Milvus 整体不可用时无法检索。记忆检索在 PostgreSQL 校验失败时 fail-closed。生产需要重试、降级和健康检查。</p>
+<hr />
+<h2 id="8">8. 演示建议</h2>
+<h3 id="80-30">8.0 30 秒答辩稿</h3>
+<p>Mnemo 是一个带长期记忆的可核验 RAG 助手。文档经过父子块切分和 hybrid 检索后，用 rerank 选出证据，再由 LangGraph Agent 生成带 <code>[n]</code> 引用和 quote 的回答；对话会定时压缩成 PostgreSQL 中的版本化记忆，Milvus 只做可重建投影。我们用 50 题证据级评测、答案 Judge A/B 和独立 KB 的分块实验证明链路有效，同时也明确它目前是单用户课程原型，安全和评测仍有边界。</p>
+<h3 id="81-5">8.1 5 分钟演示顺序</h3>
+<ol>
+<li>打开 Streamlit，选择 <code>violet-kb</code>。</li>
+<li>问一个单跳事实题，展示 <code>[n]</code> 和来源 quote/locator。</li>
+<li>问一个多跳/版本冲突题，展示 trace 和 deep/auto 的差异。</li>
+<li>打开记忆抽屉，展示摘要/语义/情节/程序记忆和删除。</li>
+<li>打开 <code>docs/chunking-comparison.md</code>，讲 400/0 的真实结果和 CI。</li>
+<li>最后主动讲边界：单用户、标签自动、93.5% 是历史基线。</li>
+</ol>
+<h3 id="82">8.2 启动命令</h3>
+<pre><code class="language-powershell"># 基础设施
+docker compose up -d
+
+# 后端
+cd backend
+$env:PORT=&quot;8010&quot;
+..\.venv\Scripts\python.exe main.py
+
+# 前端
+cd ..
+$env:MNEMO_API_BASE_URL=&quot;http://127.0.0.1:8010&quot;
+.\.venv\Scripts\python.exe -m streamlit run frontend\app.py --server.port 8501
+</code></pre>
+<h3 id="83">8.3 测试与评测</h3>
+<pre><code class="language-bash">python -m pytest -q
+python evals/run_eval.py --check-only
+python evals/build_gold_evidence.py --check-only
+python evals/chunk_experiment.py --dry-run
+</code></pre>
+<hr />
+<h2 id="9">9. 未来工作</h2>
+<h3 id="_15">近期</h3>
+<ul>
+<li>认证、租户隔离、默认本机监听、CORS 白名单。</li>
+<li>记忆 outbox / 多 worker 锁。</li>
+<li>人工复核 <code>gold_evidence</code> 10–15 条。</li>
+<li>用当前 DeepSeek 重跑答案评测，区分生成模型和 Judge。</li>
+<li>把 400/0 放进答案评测，再决定默认配置。</li>
+</ul>
+<h3 id="_16">中期</h3>
+<ul>
+<li>文档版本 <code>current/archived</code> 和版本冲突提示。</li>
+<li>表格/标题感知切分，减少 q002/q004 类失败。</li>
+<li>记忆 LLM 冲突裁决（ADD/UPDATE/NOOP）。</li>
+<li>Alembic + CI + 集成测试。</li>
+</ul>
+<h3 id="_17">长期</h3>
+<ul>
+<li>多租户 SaaS。</li>
+<li>多领域语料和更大评测集。</li>
+<li>前端组件化/React。</li>
+<li>成本、延迟和质量的自动回归。</li>
+</ul>
+<hr />
+<h2 id="10">10. 总结</h2>
+<p>Mnemo 的核心不是“接了一个大模型”，而是把 RAG 和长期记忆做成了一条可运行、可解释、可评测的工程链路：</p>
+<ul>
+<li>文档有父子块、状态和来源；</li>
+<li>检索有 hybrid、rerank 和 trace；</li>
+<li>回答有引用和 quote；</li>
+<li>记忆有事实源、版本、来源和重建；</li>
+<li>评测有证据标签、指标、meta 和分块实验。</li>
+</ul>
+<p>它仍然是单用户课程原型，安全、评测和一致性都有明确边界；但这些边界被写进了文档和实验，而不是藏在 Demo 里。这是这个项目最值得讲的部分。</p>
+    <footer class="footer">
+      Mnemo · 课程项目介绍 · 生成日期 2026-11-17 · <a href="https://github.com/wh-violet667/Mnemo">GitHub</a>
+    </footer>
+  </main>
+</div>
+
+<button id="toTop" type="button" title="回到顶部">↑</button>
+<script>
+  // 给 “Q1：...” 段落加左侧强调条，便于答辩时快速定位。
+  document.querySelectorAll('main p > strong').forEach(function (strong) {
+    if (/^Q\d+[：:]/.test(strong.textContent.trim())) {
+      strong.parentElement.classList.add('question');
+    }
+  });
+  // 目录链接在当前阅读位置高亮。
+  const links = Array.from(document.querySelectorAll('.sidebar nav a'));
+  const sections = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (!entry.isIntersecting) return;
+      links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
+    });
+  }, { rootMargin: '-15% 0px -70% 0px' });
+  sections.forEach(section => observer.observe(section));
+  const top = document.getElementById('toTop');
+  window.addEventListener('scroll', function () {
+    top.style.display = window.scrollY > 600 ? 'block' : 'none';
+  });
+  top.addEventListener('click', function () {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+</script>
+</body>
+</html>

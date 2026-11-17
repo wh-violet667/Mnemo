@@ -12,10 +12,13 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis%20Stack-7.4-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/Docs-GitHub%20Pages-6d28d9)](https://wh-violet667.github.io/Mnemo/)
 
 ![Mnemo 对话与记忆抽屉](assets/demo.png)
 
 *演示数据：`violet-kb` 中的 12 份 DOCX；记忆抽屉展示演示环境中的 17 条长期记忆（种子 + 自动抽取）。*
+
+> 课程答辩版介绍、核心组件详解和 48 个老师追问回答：[在线网页](https://wh-violet667.github.io/Mnemo/) · [`Markdown 源文件`](docs/project-introduction.md)。
 
 ## 这个项目解决什么
 
@@ -509,6 +512,8 @@ Mnemo/
 │   ├── answer-eval-summary.json  # 答案评测聚合指标
 │   ├── answer-eval-human-review.csv # 12 条人工抽检表
 │   ├── chunking-comparison.md    # 分块策略对比报告（脚本生成）
+│   ├── project-introduction.md   # 项目介绍与答辩问答
+│   ├── index.html                # GitHub Pages 静态页面
 │   └── phase1-agentic-lite.md   # Agentic-lite 设计与实现文档
 ├── data/
 │   ├── README.md                # 本地语料说明
