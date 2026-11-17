@@ -18,7 +18,7 @@
 
 *演示数据：`violet-kb` 中的 12 份 DOCX；记忆抽屉展示演示环境中的 17 条长期记忆（种子 + 自动抽取）。*
 
-> 课程答辩版介绍、核心组件详解和 48 个老师追问回答：[在线网页](https://wh-violet667.github.io/Mnemo/) · [`Markdown 源文件`](docs/project-introduction.md)。页面由 `scripts/build_docs_site.py` 生成，GitHub Pages 从 `docs/` 发布。
+> 课程答辩版介绍、核心组件详解和 48 个老师追问回答（中英对照）：[在线网页](https://wh-violet667.github.io/Mnemo/) · [`Markdown 源文件`](docs/project-introduction.md)。页面由 `scripts/build_docs_site.py` 生成，GitHub Pages 从 `docs/` 发布。
 
 ## 这个项目解决什么
 
