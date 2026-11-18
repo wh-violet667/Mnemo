@@ -25,7 +25,7 @@ NAMED_CHUNK_PROFILES: dict[str, dict[str, int]] = {
     "coarse-no-overlap": {
         "parent_chunk_size": 1000,
         "parent_chunk_overlap": 200,
-        "child_chunk_size": 500,
+        "child_chunk_size": 400,
         "child_chunk_overlap": 0,
     },
 }

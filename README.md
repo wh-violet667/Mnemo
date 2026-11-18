@@ -75,9 +75,11 @@ Mnemo 围绕这两点做了四件事：
 | Profile | 父块 | 子块 |
 |---|---:|---:|
 | `fine-overlap` | 1000 / 200 | 200 / 50 |
-| `coarse-no-overlap` | 1000 / 200 | 500 / 0 |
+| `coarse-no-overlap` | 1000 / 200 | 400 / 0 |
 
-`GET /chunking/profiles` 可读取策略列表；上传时传 `chunk_profile`，或继续使用显式数值参数进行自定义实验。两种传参方式不能同时使用。
+`GET /chunking/profiles` 可读取策略列表；上传时传 `chunk_profile`，或继续使用显式数值参数进行自定义实验。两种传参方式不能同时使用。知识库第一次上传会绑定当前策略，后续上传必须匹配，否则返回 `409`，避免同一索引混用不同 chunk 配置。
+
+旧知识库如果已有文件但没有记录 `chunk_config`，启动时会标记为 `legacy-unknown` 并禁止继续追加文件；请新建知识库（暂未提供自动迁移脚本）。
 
 ### 答案评测
 
@@ -386,7 +388,7 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 ## 使用流程
 
 1. 创建一个知识库。
-2. 选择命名分块策略并上传 PDF / DOCX，等待后台解析、分块、向量化；文件状态会显示 `processing / ready / failed`。同一对比知识库应保持同一策略。
+2. 选择命名分块策略并上传 PDF / DOCX，等待后台解析、分块、向量化；文件状态会显示 `processing / ready / failed`。第一次上传会把策略绑定到该知识库，后续上传必须匹配；需要换策略时新建知识库。
 3. 选择知识库和检索模式（快速 / 自动 / 深入），提问。
 4. 回答下方显示本次执行摘要（模式 / 轮次 / 证据数 / 记忆使用 / 耗时）；点击 `[1]` 跳到来源卡片，卡片显示支持该 claim 的 quote 和段落定位，可展开/收起。
 5. 新建/切换会话，验证上下文隔离；会话右侧 `⋯` 可重命名。
@@ -400,7 +402,7 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 | 对话 | `GET /chat_with_agent/stream`（支持 `retrieval_mode=auto/fast/deep`、`top_k=1..50`） |
 | 运行时 | `GET /runtime`（评测溯源：代码版本、模型、chunk 配置；不含密钥） |
 | 分块 | `GET /chunking/profiles`（命名 profile 列表） |
-| 知识库 | `POST/GET /knowledge-bases`、`DELETE /knowledge-bases/{id}` |
+| 知识库 | `POST/GET /knowledge-bases`、`GET /knowledge-bases/{id}/chunk-config`、`DELETE /knowledge-bases/{id}` |
 | 文件 | `POST /document_upload`、`GET /knowledge-bases/{id}/files`、`DELETE /knowledge-bases/{id}/documents/{hash}` |
 | 会话 | `POST/GET /conversations`、`PATCH/DELETE /conversations/{id}`、`PATCH /conversations/{id}/knowledge-base`、`DELETE /conversations/{id}/last-turn`、`GET /conversations/{id}/messages` |
 | 记忆 | `GET /memories?user_id=1&memory_type=semantic`、`DELETE /memories/{id}?user_id=1` |
@@ -474,7 +476,7 @@ python evals/answer_eval.py --no-judge --limit 10
 python -m pytest -q
 ```
 
-当前 97 个测试（含参数化），覆盖：
+当前 100 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
 - Recall@k / MRR / Precision@k / nDCG / 分位数
@@ -547,7 +549,7 @@ Mnemo/
 │   ├── judges.py                # Judge A/B 提示词与解析
 │   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
-├── tests/                       # pytest（97 个测试）
+├── tests/                       # pytest（100 个测试）
 ├── scripts/                     # 网页生成、Agentic 冒烟
 │   ├── build_docs_site.py       # 从 Markdown 生成 GitHub Pages
 │   ├── smoke_agentic.py         # 真实模型 planner/critic 冒烟
@@ -576,7 +578,7 @@ Mnemo/
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 97 个测试
+- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 100 个测试
 - [x] 默认检索模式改为 `fast`，需要多轮时显式选择
 - [x] 答案评测：FactualCorrectness / Faithfulness / Citation / Refusal（violet 50 + 6 拒答）
 - [ ] 人工抽检 12–15 条并复核 Judge A/B

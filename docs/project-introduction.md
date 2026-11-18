@@ -250,6 +250,13 @@ Agent 的职责不是“直接回答问题”，而是决定：
 - child：200 字符，overlap 50
 - separators：`\n\n`、`\n`、`。`、`！`、`？`、`，`、`、`、空格、空串
 
+上传界面提供命名策略：
+
+- `fine-overlap`：1000/200 + 200/50
+- `coarse-no-overlap`：1000/200 + 400/0
+
+第一次上传会把 profile/config 绑定到知识库；后续上传必须匹配，否则返回 409。旧知识库若已有文件但没有记录配置，会标记为 `legacy-unknown`，禁止继续追加，避免混合索引。
+
 为什么父子块：
 
 - 子块小，向量表达更集中，召回更准。
@@ -270,8 +277,8 @@ Agent 的职责不是“直接回答问题”，而是决定：
 |---|---|
 | `users` | 用户与画像 |
 | `conversations` | 会话 |
-| `knowledge_bases` | 知识库 |
-| `file_metadata` | 文件哈希、文件名、状态、错误 |
+| `knowledge_bases` | 知识库、绑定的 chunk profile/config |
+| `file_metadata` | 文件哈希、文件名、状态、错误、实际 chunk profile/config |
 | `parent_chunks` | 父块原文 |
 | `chunk_hashes` | 子块哈希 |
 | `raw_conversations` | 原始对话消息 |

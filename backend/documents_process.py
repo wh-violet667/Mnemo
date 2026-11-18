@@ -97,8 +97,10 @@ class DocumentProcessor:
         self,
         hash_storage: HashStorage = None,
         chunk_config: ChunkConfig | None = None,
+        chunk_profile: str | None = None,
     ):
         self.chunk_config = chunk_config or default_chunk_config()
+        self.chunk_profile = chunk_profile
         self.parent_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_config.parent_chunk_size,
             chunk_overlap=self.chunk_config.parent_chunk_overlap,
@@ -230,6 +232,8 @@ class DocumentProcessor:
             user_id=user_id,
             parents_data=parent_data_list,
             chunk_hashes=all_hashes,
+            chunk_profile=self.chunk_profile,
+            chunk_config=self.chunk_config.as_dict(),
         )
         logger.info(
             f"==========PostgreSQL 原子写入完成："

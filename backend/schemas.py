@@ -18,6 +18,7 @@ class FileItem(BaseModel):
     file_name: str
     status: Optional[str] = None
     error: Optional[str] = None
+    chunk_profile: Optional[str] = None
     uploaded_at: datetime
 
 class GetKnowledgeBaseFilesResponse(BaseModel):

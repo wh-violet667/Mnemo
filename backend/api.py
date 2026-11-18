@@ -119,7 +119,7 @@ def _chunk_config_or_422(
     parent_chunk_overlap: int | None,
     child_chunk_size: int | None,
     child_chunk_overlap: int | None,
-) -> ChunkConfig:
+) -> tuple[ChunkConfig, str | None]:
     try:
         numeric_values = (
             parent_chunk_size,
@@ -127,15 +127,19 @@ def _chunk_config_or_422(
             child_chunk_size,
             child_chunk_overlap,
         )
-        if chunk_profile:
+        profile_name = (chunk_profile or "").strip() or None
+        if profile_name:
             if any(value is not None for value in numeric_values):
                 raise ValueError("chunk_profile 不能与显式 chunk 参数同时使用")
-            return named_chunk_config(chunk_profile)
-        return validate_chunk_config(
-            parent_chunk_size=parent_chunk_size,
-            parent_chunk_overlap=parent_chunk_overlap,
-            child_chunk_size=child_chunk_size,
-            child_chunk_overlap=child_chunk_overlap,
+            return named_chunk_config(profile_name), profile_name
+        return (
+            validate_chunk_config(
+                parent_chunk_size=parent_chunk_size,
+                parent_chunk_overlap=parent_chunk_overlap,
+                child_chunk_size=child_chunk_size,
+                child_chunk_overlap=child_chunk_overlap,
+            ),
+            None,
         )
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -172,7 +176,7 @@ async def file_upload(
     async with upload_semaphore:
         try:
             knowledge_base_id = _kb_id_or_422(knowledge_base_id)
-            chunk_config = _chunk_config_or_422(
+            chunk_config, resolved_chunk_profile = _chunk_config_or_422(
                 chunk_profile=chunk_profile,
                 parent_chunk_size=parent_chunk_size,
                 parent_chunk_overlap=parent_chunk_overlap,
@@ -273,6 +277,25 @@ async def file_upload(
                     is_duplicate=True,
                 )
 
+            # 一个知识库只允许一种 chunk 配置；第一次上传“占用”配置，
+            # 后续上传必须匹配，否则要求新建知识库，避免混合索引。
+            claim = await postgresql_client.claim_kb_chunk_config(
+                knowledge_base_id=knowledge_base_id,
+                user_id=user_id,
+                chunk_profile=resolved_chunk_profile,
+                chunk_config=chunk_config.as_dict(),
+            )
+            if not claim.get("success", False):
+                _cleanup_temp_file(temp_file_path)
+                current_profile = claim.get("chunk_profile") or "自定义配置"
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"{claim.get('message', '分块策略冲突')}"
+                        f"（当前知识库：{current_profile}）"
+                    ),
+                )
+
             if existing_status == "failed":
                 # 上一次入库失败，先清掉旧投影和旧元数据，再按新文件重新处理。
                 logger.info(f"发现失败记录，清理后重传: {filename}")
@@ -297,7 +320,12 @@ async def file_upload(
 
             # 先落一条 processing 记录，后台任务失败时也能被看见
             await hash_storage.add_file_hash(
-                file_hash, filename, knowledge_base_id, user_id
+                file_hash,
+                filename,
+                knowledge_base_id,
+                user_id,
+                chunk_profile=resolved_chunk_profile,
+                chunk_config=chunk_config.as_dict(),
             )
 
             # 确保 background_tasks 不为 None
@@ -306,7 +334,9 @@ async def file_upload(
 
             # DocumentProcessor 需要改为异步版本
             document_instance = DocumentProcessor(
-                hash_storage, chunk_config=chunk_config
+                hash_storage,
+                chunk_config=chunk_config,
+                chunk_profile=resolved_chunk_profile,
             )
 
             # 后台任务：成功写 ready，失败写 failed + error
@@ -483,11 +513,29 @@ async def get_knowledge_base_files(
                 file_name=file["file_name"],
                 status=file.get("status"),
                 error=file.get("error"),
+                chunk_profile=file.get("chunk_profile"),
                 uploaded_at=file["uploaded_at"],
             )
             for file in result["files"]
         ],
     )
+
+
+@router.get("/knowledge-bases/{knowledge_base_id}/chunk-config")
+async def get_knowledge_base_chunk_config(
+    knowledge_base_id: str,
+    user_id: int,
+    postgresql_client=Depends(get_postgresql_client),
+):
+    """Read the chunk profile/config bound to a knowledge base."""
+
+    knowledge_base_id = _kb_id_or_422(knowledge_base_id)
+    result = await postgresql_client.get_knowledge_base_chunk_config(
+        knowledge_base_id, user_id
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
 
 
 @router.delete(

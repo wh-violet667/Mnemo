@@ -835,6 +835,30 @@ def fetch_runtime() -> Dict[str, Any]:
         return {}
 
 
+def fetch_chunk_profiles() -> List[Dict[str, Any]]:
+    try:
+        return api("GET", "/chunking/profiles", timeout=5).get("profiles", [])
+    except Exception:
+        return [
+            {"name": "fine-overlap", "child_chunk_size": 200, "child_chunk_overlap": 50},
+            {"name": "coarse-no-overlap", "child_chunk_size": 400, "child_chunk_overlap": 0},
+        ]
+
+
+def fetch_kb_chunk_config(kb_id: str) -> Optional[Dict[str, Any]]:
+    if not kb_id:
+        return None
+    try:
+        return api(
+            "GET",
+            f"/knowledge-bases/{kb_id}/chunk-config",
+            params={"user_id": USER_ID},
+            timeout=5,
+        )
+    except Exception:
+        return None
+
+
 def fetch_files(kb_id: str) -> List[Dict[str, Any]]:
     return api(
         "GET",
@@ -1882,6 +1906,15 @@ def render_sidebar() -> None:
             st.session_state.kb_widget = ""
             st.caption("还没有知识库，请先在下方创建")
 
+        if "kb_chunk_configs" not in st.session_state:
+            st.session_state.kb_chunk_configs = {}
+        if "chunk_profiles" not in st.session_state:
+            st.session_state.chunk_profiles = fetch_chunk_profiles()
+        if selected_kb and selected_kb not in st.session_state.kb_chunk_configs:
+            st.session_state.kb_chunk_configs[selected_kb] = fetch_kb_chunk_config(
+                selected_kb
+            )
+
         cached_files = st.session_state.kb_files.get(selected_kb, []) or []
         cached_statuses = [str(item.get("status") or "").lower() for item in cached_files]
         processing_count = cached_statuses.count("processing")
@@ -2021,16 +2054,58 @@ def render_sidebar() -> None:
                 else:
                     st.caption("暂无文件")
 
-                chunk_profile = st.selectbox(
-                    "上传分块策略",
-                    options=["fine-overlap", "coarse-no-overlap"],
-                    format_func=lambda value: {
-                        "fine-overlap": "细粒度 + 重叠（200/50）",
-                        "coarse-no-overlap": "粗粒度 + 无重叠（500/0）",
-                    }[value],
-                    key=f"chunk_profile_{selected_kb}",
-                    help="同一对比知识库应使用同一种分块策略；切换后请新建知识库再上传。",
-                )
+                profiles = st.session_state.get("chunk_profiles") or []
+                profile_names = [
+                    str(item.get("name"))
+                    for item in profiles
+                    if item.get("name")
+                ] or ["fine-overlap", "coarse-no-overlap"]
+                profile_labels = {
+                    str(item.get("name")): (
+                        f"{item.get('name')}（"
+                        f"{item.get('child_chunk_size', '?')}/"
+                        f"{item.get('child_chunk_overlap', '?')}）"
+                    )
+                    for item in profiles
+                    if item.get("name")
+                }
+                kb_chunk = st.session_state.kb_chunk_configs.get(selected_kb) or {}
+                bound_profile = str(kb_chunk.get("chunk_profile") or "") or None
+                bound_config = kb_chunk.get("chunk_config")
+                upload_disabled = streaming or not selected_kb
+
+                if bound_profile and bound_profile in profile_names:
+                    chunk_profile = st.selectbox(
+                        "上传分块策略",
+                        options=profile_names,
+                        index=profile_names.index(bound_profile),
+                        format_func=lambda value: profile_labels.get(value, value),
+                        key=f"chunk_profile_{selected_kb}",
+                        disabled=True,
+                        help="该知识库已绑定分块策略；如需切换，请新建知识库。",
+                    )
+                    st.caption(f"已绑定分块策略：{chunk_profile}")
+                elif bound_profile == "legacy-unknown" or (
+                    not bound_profile and not bound_config and cached_files
+                ):
+                    chunk_profile = None
+                    upload_disabled = True
+                    st.caption(
+                        "该知识库是旧索引，未记录分块策略；请新建知识库后再上传，"
+                        "避免混用不同 chunk 配置。"
+                    )
+                elif bound_config:
+                    chunk_profile = None
+                    upload_disabled = True
+                    st.caption("该知识库已绑定自定义分块配置；请新建知识库后再上传。")
+                else:
+                    chunk_profile = st.selectbox(
+                        "上传分块策略",
+                        options=profile_names,
+                        format_func=lambda value: profile_labels.get(value, value),
+                        key=f"chunk_profile_{selected_kb}",
+                        help="第一次上传会绑定当前知识库；同一知识库之后不能切换策略。",
+                    )
                 uploaded = st.file_uploader(
                     "上传文档",
                     type=["pdf", "docx", "doc"],
@@ -2041,7 +2116,7 @@ def render_sidebar() -> None:
                     "上传",
                     key=f"upload_btn_{selected_kb}",
                     use_container_width=True,
-                    disabled=streaming,
+                    disabled=upload_disabled,
                 ):
                     with st.spinner("上传并处理中…"):
                         try:
@@ -2063,6 +2138,7 @@ def render_sidebar() -> None:
                             )
                             response.raise_for_status()
                             st.session_state.kb_files.pop(selected_kb, None)
+                            st.session_state.kb_chunk_configs.pop(selected_kb, None)
                             cache_kb_files(selected_kb)
                             st.success("已上传，后台处理中")
                             st.rerun()
@@ -2088,6 +2164,7 @@ def render_sidebar() -> None:
                         )
                         st.session_state.kbs = fetch_kbs()
                         st.session_state.kb_files.pop(selected_kb, None)
+                        st.session_state.kb_chunk_configs.pop(selected_kb, None)
                         remaining = st.session_state.kbs
                         fallback_kb = remaining[0] if remaining else ""
                         st.session_state.selected_kb = fallback_kb

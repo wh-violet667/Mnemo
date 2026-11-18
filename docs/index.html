@@ -542,6 +542,12 @@
 <li>child：200 字符，overlap 50</li>
 <li>separators：<code>\n\n</code>、<code>\n</code>、<code>。</code>、<code>！</code>、<code>？</code>、<code>，</code>、<code>、</code>、空格、空串</li>
 </ul>
+<p>上传界面提供命名策略：</p>
+<ul>
+<li><code>fine-overlap</code>：1000/200 + 200/50</li>
+<li><code>coarse-no-overlap</code>：1000/200 + 400/0</li>
+</ul>
+<p>第一次上传会把 profile/config 绑定到知识库；后续上传必须匹配，否则返回 409。旧知识库若已有文件但没有记录配置，会标记为 <code>legacy-unknown</code>，禁止继续追加，避免混合索引。</p>
 <p>为什么父子块：</p>
 <ul>
 <li>子块小，向量表达更集中，召回更准。</li>
@@ -574,11 +580,11 @@
 </tr>
 <tr>
 <td><code>knowledge_bases</code></td>
-<td>知识库</td>
+<td>知识库、绑定的 chunk profile/config</td>
 </tr>
 <tr>
 <td><code>file_metadata</code></td>
-<td>文件哈希、文件名、状态、错误</td>
+<td>文件哈希、文件名、状态、错误、实际 chunk profile/config</td>
 </tr>
 <tr>
 <td><code>parent_chunks</code></td>
@@ -1260,7 +1266,7 @@ python evals/chunk_experiment.py --dry-run
 </ul>
 <p>它仍然是单用户课程原型，安全、评测和一致性都有明确边界；但这些边界被写进了文档和实验，而不是藏在 Demo 里。这是这个项目最值得讲的部分。</p>
     <footer class="footer">
-      Mnemo · 课程项目介绍 · 生成日期 2026-11-17 · <a href="https://github.com/wh-violet667/Mnemo">GitHub</a>
+      Mnemo · 课程项目介绍 · 生成日期 2026-11-18 · <a href="https://github.com/wh-violet667/Mnemo">GitHub</a>
     </footer>
   </main>
 </div>

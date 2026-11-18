@@ -1,5 +1,5 @@
 # hash_storage.py
-from typing import Optional, Set, List
+from typing import Any, Dict, Optional, Set, List
 import logging
 from postgresql_client import get_postgresql_client
 
@@ -37,10 +37,25 @@ class HashStorage:
         client = await self._get_pg_client()
         return await client.get_file_status(file_hash, knowledge_base_id, user_id)
 
-    async def add_file_hash(self, file_hash: str, file_name: str, knowledge_base_id: str, user_id: int):
-        """添加文件哈希值（同时添加文件元数据）"""
+    async def add_file_hash(
+        self,
+        file_hash: str,
+        file_name: str,
+        knowledge_base_id: str,
+        user_id: int,
+        chunk_profile: Optional[str] = None,
+        chunk_config: Optional[Dict[str, Any]] = None,
+    ):
+        """添加文件哈希值（同时添加文件元数据和 chunk 配置）。"""
         client = await self._get_pg_client()
-        await client.add_file_metadata(file_hash, file_name, knowledge_base_id, user_id)
+        await client.add_file_metadata(
+            file_hash,
+            file_name,
+            knowledge_base_id,
+            user_id,
+            chunk_profile=chunk_profile,
+            chunk_config=chunk_config,
+        )
     
     # ============ 块哈希管理 ============
     

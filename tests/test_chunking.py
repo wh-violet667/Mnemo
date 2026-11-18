@@ -26,13 +26,17 @@ def test_chunk_config_accepts_non_overlapping_child_chunks():
     assert config.child_chunk_overlap == 0
 
 
+def test_default_named_profile_matches_default_config():
+    assert named_chunk_config() == default_chunk_config()
+
+
 def test_named_profiles_cover_fine_and_coarse_strategies():
     fine = named_chunk_config("fine-overlap")
     coarse = named_chunk_config("coarse-no-overlap")
 
     assert fine.child_chunk_size == 200
     assert fine.child_chunk_overlap == 50
-    assert coarse.child_chunk_size == 500
+    assert coarse.child_chunk_size == 400
     assert coarse.child_chunk_overlap == 0
     assert len(list_named_chunk_configs()) == 2
 

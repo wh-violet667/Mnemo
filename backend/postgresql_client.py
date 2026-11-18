@@ -15,6 +15,32 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
+def _decode_jsonb(value: Any) -> Any:
+    """Accept both asyncpg's str and codec-decoded objects for JSONB."""
+
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return value
+
+
+def _chunk_config_key(value: Any) -> str:
+    decoded = _decode_jsonb(value)
+    if not isinstance(decoded, dict):
+        return ""
+    core = {
+        "parent_chunk_size": int(decoded.get("parent_chunk_size", 0)),
+        "parent_chunk_overlap": int(decoded.get("parent_chunk_overlap", 0)),
+        "child_chunk_size": int(decoded.get("child_chunk_size", 0)),
+        "child_chunk_overlap": int(decoded.get("child_chunk_overlap", 0)),
+        "separators": [str(item) for item in (decoded.get("separators") or [])],
+    }
+    return json.dumps(core, ensure_ascii=False, sort_keys=True)
+
+
 async def ensure_database_exists(dsn: str) -> None:
     """确保数据库存在，不存在则自动创建。
 
@@ -179,10 +205,16 @@ class PostgreSQLParentClient:
                         CREATE TABLE IF NOT EXISTS knowledge_bases (
                             knowledge_base_id VARCHAR(128) NOT NULL,
                             user_id INTEGER NOT NULL,
+                            chunk_profile VARCHAR(64),
+                            chunk_config JSONB,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             PRIMARY KEY (knowledge_base_id, user_id),
                             FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
                         );
+                        ALTER TABLE knowledge_bases
+                            ADD COLUMN IF NOT EXISTS chunk_profile VARCHAR(64);
+                        ALTER TABLE knowledge_bases
+                            ADD COLUMN IF NOT EXISTS chunk_config JSONB;
 
                         -- 4. 文件信息表（关联知识库和用户，支持级联删除）
                         CREATE TABLE IF NOT EXISTS file_metadata (
@@ -192,6 +224,8 @@ class PostgreSQLParentClient:
                             user_id INTEGER NOT NULL,
                             status VARCHAR(20) NOT NULL DEFAULT 'processing',
                             error TEXT,
+                            chunk_profile VARCHAR(64),
+                            chunk_config JSONB,
                             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             PRIMARY KEY (file_hash, knowledge_base_id, user_id),
@@ -201,6 +235,10 @@ class PostgreSQLParentClient:
                             ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'ready';
                         ALTER TABLE file_metadata
                             ADD COLUMN IF NOT EXISTS error TEXT;
+                        ALTER TABLE file_metadata
+                            ADD COLUMN IF NOT EXISTS chunk_profile VARCHAR(64);
+                        ALTER TABLE file_metadata
+                            ADD COLUMN IF NOT EXISTS chunk_config JSONB;
                         ALTER TABLE file_metadata
                             ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
                         
@@ -355,6 +393,50 @@ class PostgreSQLParentClient:
                         CREATE INDEX IF NOT EXISTS idx_kb_user ON knowledge_bases(user_id);-- 加速查询：查询某用户的所有知识库
                     """
                     )
+
+                    # Legacy KBs have files but no recorded chunk config.
+                    # Do not guess the old strategy (it may have been custom);
+                    # mark it unknown so uploads cannot silently mix indexes.
+                    legacy_count = await conn.fetchval(
+                        """
+                        SELECT COUNT(*) FROM knowledge_bases AS kbs
+                        WHERE kbs.chunk_config IS NULL
+                          AND EXISTS (
+                              SELECT 1 FROM file_metadata AS files
+                              WHERE files.knowledge_base_id = kbs.knowledge_base_id
+                                AND files.user_id = kbs.user_id
+                          )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE knowledge_bases AS kbs
+                        SET chunk_profile = COALESCE(kbs.chunk_profile, 'legacy-unknown')
+                        WHERE kbs.chunk_config IS NULL
+                          AND EXISTS (
+                              SELECT 1 FROM file_metadata AS files
+                              WHERE files.knowledge_base_id = kbs.knowledge_base_id
+                                AND files.user_id = kbs.user_id
+                          )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE file_metadata AS files
+                        SET chunk_profile = COALESCE(files.chunk_profile, 'legacy-unknown')
+                        FROM knowledge_bases AS kbs
+                        WHERE files.knowledge_base_id = kbs.knowledge_base_id
+                          AND files.user_id = kbs.user_id
+                          AND files.chunk_config IS NULL
+                          AND kbs.chunk_profile = 'legacy-unknown'
+                        """
+                    )
+                    if legacy_count:
+                        logger.info(
+                            "Marked %s legacy knowledge bases as legacy-unknown; "
+                            "create a new KB or migrate them explicitly before upload",
+                            legacy_count,
+                        )
 
                 self._pool_initialized = True
                 logger.info("PostgreSQL client initialized successfully")
@@ -695,6 +777,162 @@ class PostgreSQLParentClient:
             logger.error(f"创建知识库 {knowledge_base_id} 失败: {e}")
             raise
 
+    async def get_knowledge_base_chunk_config(
+        self, knowledge_base_id: str, user_id: int
+    ) -> Dict[str, Any]:
+        """Return the chunking profile bound to a knowledge base."""
+
+        if not self.pool:
+            raise RuntimeError("Connection pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT chunk_profile, chunk_config
+                FROM knowledge_bases
+                WHERE knowledge_base_id = $1 AND user_id = $2
+                """,
+                knowledge_base_id,
+                user_id,
+            )
+
+        if not row:
+            return {
+                "success": False,
+                "message": "知识库不存在或无权访问",
+                "knowledge_base_id": knowledge_base_id,
+                "chunk_profile": None,
+                "chunk_config": None,
+            }
+
+        return {
+            "success": True,
+            "knowledge_base_id": knowledge_base_id,
+            "chunk_profile": row["chunk_profile"],
+            "chunk_config": _decode_jsonb(row["chunk_config"]),
+        }
+
+    async def claim_kb_chunk_config(
+        self,
+        knowledge_base_id: str,
+        user_id: int,
+        chunk_profile: Optional[str],
+        chunk_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Bind a KB to one chunk config, or reject a conflicting upload.
+
+        The first upload claims the configuration.  Later uploads must match
+        the stored profile/config; otherwise the caller should create a new KB.
+        A row lock makes concurrent first uploads deterministic.
+        """
+
+        if not self.pool:
+            raise RuntimeError("Connection pool not initialized")
+
+        config_json = json.dumps(
+            chunk_config, ensure_ascii=False, sort_keys=True
+        )
+        expected_key = _chunk_config_key(chunk_config)
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO users (user_id, created_at)
+                    VALUES ($1, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    user_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO knowledge_bases (
+                        knowledge_base_id, user_id, chunk_profile, chunk_config
+                    )
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    ON CONFLICT (knowledge_base_id, user_id) DO NOTHING
+                    """,
+                    knowledge_base_id,
+                    user_id,
+                    chunk_profile,
+                    config_json,
+                )
+                row = await conn.fetchrow(
+                    """
+                    SELECT chunk_profile, chunk_config
+                    FROM knowledge_bases
+                    WHERE knowledge_base_id = $1 AND user_id = $2
+                    FOR UPDATE
+                    """,
+                    knowledge_base_id,
+                    user_id,
+                )
+                if not row:
+                    raise RuntimeError("knowledge base row disappeared during claim")
+
+                existing_config = _decode_jsonb(row["chunk_config"])
+                if existing_config is None:
+                    has_files = await conn.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM file_metadata
+                            WHERE knowledge_base_id = $1 AND user_id = $2
+                        )
+                        """,
+                        knowledge_base_id,
+                        user_id,
+                    )
+                    if has_files:
+                        return {
+                            "success": False,
+                            "message": (
+                                "该知识库是旧索引，未记录分块配置；请新建知识库后上传，"
+                                "避免混用不同 chunk 配置"
+                            ),
+                            "knowledge_base_id": knowledge_base_id,
+                            "chunk_profile": row["chunk_profile"],
+                            "chunk_config": None,
+                        }
+                    await conn.execute(
+                        """
+                        UPDATE knowledge_bases
+                        SET chunk_profile = $3,
+                            chunk_config = $4::jsonb
+                        WHERE knowledge_base_id = $1 AND user_id = $2
+                        """,
+                        knowledge_base_id,
+                        user_id,
+                        chunk_profile,
+                        config_json,
+                    )
+                    return {
+                        "success": True,
+                        "claimed": True,
+                        "knowledge_base_id": knowledge_base_id,
+                        "chunk_profile": chunk_profile,
+                        "chunk_config": chunk_config,
+                    }
+
+                if _chunk_config_key(existing_config) != expected_key:
+                    return {
+                        "success": False,
+                        "message": (
+                            "该知识库已绑定其他分块策略；请新建知识库后再上传，"
+                            "避免同一索引混用不同 chunk 配置"
+                        ),
+                        "knowledge_base_id": knowledge_base_id,
+                        "chunk_profile": row["chunk_profile"],
+                        "chunk_config": existing_config,
+                    }
+
+                return {
+                    "success": True,
+                    "claimed": False,
+                    "knowledge_base_id": knowledge_base_id,
+                    "chunk_profile": row["chunk_profile"],
+                    "chunk_config": existing_config,
+                }
+
     async def delete_knowledge_base(
         self, knowledge_base_id: str, user_id: int
     ) -> Dict[str, any]:
@@ -851,11 +1089,22 @@ class PostgreSQLParentClient:
         return str(status) if status is not None else None
 
     async def add_file_metadata(
-        self, file_hash: str, file_name: str, knowledge_base_id: str, user_id: int
+        self,
+        file_hash: str,
+        file_name: str,
+        knowledge_base_id: str,
+        user_id: int,
+        chunk_profile: Optional[str] = None,
+        chunk_config: Optional[Dict[str, Any]] = None,
     ):
-        """添加文件元数据"""
+        """添加文件元数据，并记录本次实际使用的分块配置。"""
         if not self.pool:
             raise RuntimeError("Connection pool not initialized")
+        config_json = (
+            json.dumps(chunk_config, ensure_ascii=False, sort_keys=True)
+            if chunk_config
+            else None
+        )
         try:
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
@@ -885,13 +1134,19 @@ class PostgreSQLParentClient:
                         """
                         INSERT INTO file_metadata (
                             file_hash, file_name, knowledge_base_id, user_id,
-                            status, error, uploaded_at, updated_at
+                            status, error, chunk_profile, chunk_config,
+                            uploaded_at, updated_at
                         )
-                        VALUES ($1, $2, $3, $4, 'processing', NULL, NOW(), NOW())
+                        VALUES (
+                            $1, $2, $3, $4, 'processing', NULL,
+                            $5, $6::jsonb, NOW(), NOW()
+                        )
                         ON CONFLICT (file_hash, knowledge_base_id, user_id) DO UPDATE
                         SET file_name = EXCLUDED.file_name,
                             status = 'processing',
                             error = NULL,
+                            chunk_profile = EXCLUDED.chunk_profile,
+                            chunk_config = EXCLUDED.chunk_config,
                             uploaded_at = NOW(),
                             updated_at = NOW()
                     """,
@@ -899,6 +1154,8 @@ class PostgreSQLParentClient:
                         file_name,
                         knowledge_base_id,
                         user_id,
+                        chunk_profile,
+                        config_json,
                     )
 
                     logger.info(
@@ -916,6 +1173,8 @@ class PostgreSQLParentClient:
         user_id: int,
         parents_data: List[Dict[str, any]],
         chunk_hashes: List[str],
+        chunk_profile: Optional[str] = None,
+        chunk_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Write parent chunks and chunk hashes atomically.
 
@@ -932,6 +1191,12 @@ class PostgreSQLParentClient:
         if not self.pool:
             raise RuntimeError("Connection pool not initialized")
 
+        config_json = (
+            json.dumps(chunk_config, ensure_ascii=False, sort_keys=True)
+            if chunk_config
+            else None
+        )
+
         try:
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
@@ -942,6 +1207,8 @@ class PostgreSQLParentClient:
                         SET file_name = $2,
                             status = 'processing',
                             error = NULL,
+                            chunk_profile = $5,
+                            chunk_config = $6::jsonb,
                             updated_at = NOW()
                         WHERE file_hash = $1
                           AND knowledge_base_id = $3
@@ -952,6 +1219,8 @@ class PostgreSQLParentClient:
                         file_name,
                         knowledge_base_id,
                         user_id,
+                        chunk_profile,
+                        config_json,
                     )
                     if not updated:
                         raise RuntimeError(
@@ -1205,7 +1474,8 @@ class PostgreSQLParentClient:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT file_hash, file_name, status, error, uploaded_at, updated_at
+                    SELECT file_hash, file_name, status, error,
+                           chunk_profile, chunk_config, uploaded_at, updated_at
                     FROM file_metadata
                     WHERE knowledge_base_id = $1 AND user_id = $2
                     ORDER BY uploaded_at DESC
