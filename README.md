@@ -70,15 +70,15 @@ Mnemo 围绕这两点做了四件事：
 
 结论：本次语料上 **400 字非重叠子块**在 Recall、Precision、nDCG 和延迟上都最好；overlap 50 有小幅正向但不显著。完整失败样本和解释见 [`docs/chunking-comparison.md`](docs/chunking-comparison.md)。
 
-第二组实验在同一份 12 篇 Markdown 上对比 `recursive` 与结构感知 `markdown-heading`（同为 1000/0 + 400/0）：
+第二组实验在同一份 12 篇 Markdown 上对比 `recursive` 与结构感知 `markdown-heading`（同为 1000/0 + 400/0）。`markdown-heading` 会把同一一级标题下的短章节合并，避免初版产生大量 100–200 字小 chunk。
 
 | 策略 | Recall@5 | MRR | Precision@5 | nDCG@5 | 子块数 |
 |---|---:|---:|---:|---:|---:|
-| `recursive-overlap` | 0.935 | 0.804 | **0.357** | 0.831 | 190 |
-| `recursive-no-parent-overlap` | 0.935 | 0.759 | 0.326 | 0.792 | 168 |
-| `markdown-heading` | 0.935 | **0.828** | 0.317 | **0.840** | 243 |
+| `recursive-overlap` | 0.935 | 0.815 | **0.357** | 0.838 | 190 |
+| `recursive-no-parent-overlap` | 0.935 | 0.770 | 0.326 | 0.798 | 168 |
+| `markdown-heading` | 0.935 | **0.835** | 0.339 | **0.849** | 209 |
 
-结构切分把表头保留率从约 **0.79** 提升到 **1.00**，但 Recall 没有提升，Precision 显著下降，索引和 P95 延迟更高；因此默认仍保留 `fine-overlap`。完整数据、CI 和失败样本见 [`docs/chunking-markdown-strategy.md`](docs/chunking-markdown-strategy.md)。
+生产路径（parent 级回表）上，`markdown-heading` 的 Recall 为 **0.978**、MRR **0.874**、nDCG **0.880**，高于基线的 0.935 / 0.855 / 0.862；但 ΔRecall 的 95% CI 下界为 0，不能宣称显著。答案级 `no-judge` 确定性指标也同方向：ExpectedContextCoverage 0.895→**0.917**、AllEvidenceHit 0.783→**0.826**、FactCoverage 0.795→**0.806**，ContextPrecision 0.497→0.485；完整 LLM Judge 尚未跑。结构切分把表头保留率从约 **0.79** 提升到 **1.00**，child 级 Precision 降幅也收窄到不显著（-0.017，CI -0.052~+0.017）。因此默认仍保留 `fine-overlap`；`markdown-heading` 可作为 Markdown 知识库的可选策略。完整数据、CI 和失败样本见 [`docs/chunking-markdown-strategy-v2.md`](docs/chunking-markdown-strategy-v2.md)。
 
 上传界面提供三个命名策略，其中 `markdown-heading` 是结构感知的第二种分块策略：
 
@@ -88,7 +88,7 @@ Mnemo 围绕这两点做了四件事：
 | `coarse-no-overlap` | `recursive` | 1000 / 200 | 400 / 0 |
 | `markdown-heading` | `markdown-heading` | 1000 / 0 | 400 / 0 |
 
-`markdown-heading` 按 `#` / `##` 标题建立 `heading_path`，尽量保持表格和代码块完整；必须切表时会在每个子块重复表头。它只接受 `.md` 文件，并用标题边界替代 overlap。归一化后的 Markdown 结构对比见 [`docs/chunking-markdown-strategy.md`](docs/chunking-markdown-strategy.md)。
+`markdown-heading` 按 `#` / `##` 标题建立 `heading_path`，同一一级标题下的相邻短章节会合并到同一父/子块，标题行保留；表格和代码块尽量完整，必须切表时每个子块重复表头。它只接受 `.md` 文件，并用标题边界替代 overlap。当前实现对比见 [`docs/chunking-markdown-strategy-v2.md`](docs/chunking-markdown-strategy-v2.md)，初版硬切结果保留在 [`docs/chunking-markdown-strategy.md`](docs/chunking-markdown-strategy.md)。
 
 `GET /chunking/profiles` 可读取策略列表；上传时传 `chunk_profile`，或继续使用显式数值参数（含 `strategy`）进行自定义实验。两种传参方式不能同时使用。知识库第一次上传会绑定当前策略，后续上传必须匹配，否则返回 `409`，避免同一索引混用不同 chunk 配置。
 
@@ -489,7 +489,7 @@ python evals/answer_eval.py --no-judge --limit 10
 python -m pytest -q
 ```
 
-当前 111 个测试（含参数化），覆盖：
+当前 112 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
 - Recall@k / MRR / Precision@k / nDCG / 分位数
@@ -541,7 +541,8 @@ Mnemo/
 │   ├── answer-eval-summary.json  # 答案评测聚合指标
 │   ├── answer-eval-human-review.csv # 12 条人工抽检表
 │   ├── chunking-comparison.md    # DOCX 尺寸对比报告（脚本生成）
-│   ├── chunking-markdown-strategy.md # 结构感知 Markdown 策略对比（脚本生成）
+│   ├── chunking-markdown-strategy.md # 结构感知 Markdown 初版（按标题硬切）
+│   ├── chunking-markdown-strategy-v2.md # 短章节合并版（当前实现）
 │   ├── project-introduction.md   # 项目介绍与答辩问答
 │   ├── index.html                # GitHub Pages 静态页面
 │   ├── windows-setup.md          # Windows/WSL/Docker 通用安装说明
@@ -565,7 +566,7 @@ Mnemo/
 │   ├── judges.py                # Judge A/B 提示词与解析
 │   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
-├── tests/                       # pytest（111 个测试）
+├── tests/                       # pytest（112 个测试）
 ├── scripts/                     # 网页生成、Agentic 冒烟
 │   ├── build_docs_site.py       # 从 Markdown 生成 GitHub Pages
 │   ├── smoke_agentic.py         # 真实模型 planner/critic 冒烟
@@ -594,7 +595,7 @@ Mnemo/
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 111 个测试
+- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 112 个测试
 - [x] 默认检索模式改为 `fast`，需要多轮时显式选择
 - [x] 答案评测：FactualCorrectness / Faithfulness / Citation / Refusal（violet 50 + 6 拒答）
 - [ ] 人工抽检 12–15 条并复核 Judge A/B

@@ -123,20 +123,40 @@ python evals/chunk_experiment.py --limit 10 --run-id chunk-pilot
 
 # 同一份 Markdown 语料对比 recursive 与结构感知 markdown-heading
 python evals/chunk_experiment.py --experiment markdown-strategy --run-id md-strategy
+
+# 复用已完成的 child 结果，额外补 parent 级（生产回表路径）评测
+python evals/chunk_experiment.py --experiment markdown-strategy \
+  --run-id md-strategy --resume --parent-eval
 ```
 
 `markdown-strategy` 使用 `docs/` 下的 12 个 `.md`，三组配置分别为
 `recursive-overlap`（1000/200 + 400/0）、`recursive-no-parent-overlap`
 （1000/0 + 400/0）和 `markdown-heading`（1000/0 + 400/0）。后两组
-尺寸完全相同，唯一变量是分块边界策略；报告写入
+尺寸完全相同，唯一变量是分块边界策略。`markdown-heading` 会把同一
+一级标题下的相邻短章节合并，避免按 H2 硬切产生大量小 chunk。报告写入
+`docs/chunking-markdown-strategy-v2.md`；初版硬切结果保留在
 `docs/chunking-markdown-strategy.md`。
 
 脚本会为每个配置建独立知识库、重新上传语料、跑 `run_eval`，最后生成
-[`docs/chunking-comparison.md`](../docs/chunking-comparison.md)：
+报告：
 
 - 各策略的 Recall / MRR / Precision / nDCG / P50 / P95；
+- child 级和可选的 parent 级（生产回表路径）两套指标；
 - 相对基线的配对 bootstrap 95% CI；
+- 索引规模、子块长度分布、表头保留率/列数一致率；
 - hit/miss 翻转样本、top files、gold evidence 和 `best_overlap`。
+
+需要答案级确定性指标时，可用同一批 KB 跑 `answer_eval.py --no-judge`；
+它输出 Hit@5、ExpectedContextCoverage、ContextPrecision、FactCoverage 和
+CitationValidity，但不跑 LLM Judge，因此没有答案正确率/忠实度/拒答准确率：
+
+```bash
+python evals/answer_eval.py \
+  --kb-id <experiment-kb> \
+  --golden evals/results/chunking/<run-id>/<config>.golden.jsonl \
+  --retrieval-mode fast --top-k 5 --no-judge \
+  --run-id <run-id>-answer --output-dir evals/results/answer_md_merge
+```
 
 ### 已知边界
 

@@ -27,7 +27,7 @@ Mnemo 是一个面向个人/小团队知识库的 RAG 问答系统：文档经�
 ### 三个下一步
 
 1. 加认证与租户隔离，默认只监听本机。
-2. 把分块实验扩展到答案质量和更多语料；结构感知策略先补“短章节合并/最小块”再复核，之后才决定是否调整默认 child 或 strategy。
+2. 结构感知已完成“短章节合并”，并补了 56 条答案级确定性指标；下一步跑完整 LLM Judge 和更大语料，再决定是否调整默认 child 或 strategy。
 3. 补 10–15 条人工证据复核、CI、Alembic 迁移和 outbox。
 
 ---
@@ -256,7 +256,7 @@ Agent 的职责不是“直接回答问题”，而是决定：
 - `coarse-no-overlap`：recursive，1000/200 + 400/0
 - `markdown-heading`：结构感知，1000/0 + 400/0，只接受 `.md`
 
-`markdown-heading` 先去掉 YAML front matter，再按 ATX 标题建立 `heading_path`；表格与代码块尽量整体保留，必须切表时每个子块重复表头；每个父/子块记录 `heading_path`、`start`、`end`、`block_type`。它用标题边界替代 overlap，因此父/子 overlap 必须为 0。
+`markdown-heading` 先去掉 YAML front matter，再按 ATX 标题建立 `heading_path`；同一一级标题下的相邻短章节会合并到同一父/子块，标题行保留；表格与代码块尽量整体保留，必须切表时每个子块重复表头；每个父/子块记录 `heading_path`、`heading_paths`、`start`、`end`、`block_type`。它用标题边界替代 overlap，因此父/子 overlap 必须为 0。
 
 第一次上传会把 profile/config 绑定到知识库；后续上传必须匹配，否则返回 409。旧知识库若已有文件但没有记录配置，会标记为 `legacy-unknown`，禁止继续追加，避免混合索引。
 
@@ -416,7 +416,8 @@ Agent 的职责不是“直接回答问题”，而是决定：
 - DOCX 尺寸实验三组：child 200/0、200/50、400/0。
 - Markdown 策略实验三组：recursive-overlap、recursive-no-parent-overlap、markdown-heading。
 - 相对基线做配对 bootstrap 95% CI，并统计子块数、表格完整性和分题型 Recall。
-- 生成 `docs/chunking-comparison.md` 和 `docs/chunking-markdown-strategy.md`，包括指标、CI、hit/miss 翻转、基线未命中。
+- `--parent-eval` 额外跑生产回表路径（parent 级），避免只看 child 检索。
+- 生成 `docs/chunking-comparison.md`、`docs/chunking-markdown-strategy.md`（初版）和 `docs/chunking-markdown-strategy-v2.md`（短章节合并版），包括指标、CI、hit/miss 翻转、基线未命中。
 
 #### 运行身份
 
@@ -555,11 +556,21 @@ chunk_experiment.py
 - `markdown-heading`：结构感知，1000/0 + 400/0，按标题、段落、表格切分。
 - 同样的 `text-embedding-v4` / `qwen3.7-text-rerank`、50 题、child 级检索、`top_k=5`、`hybrid+rerank`。
 
+初版 `markdown-heading` 按每个 `##` 硬切，产生 243 个子块、中位长度 192，child 级 Precision 显著下降（-0.039）。当前实现加入**短章节合并**：同一一级标题下的相邻章节打包到同一父/子块，标题行保留，子块数降到 209、中位长度升到 297。
+
 | 策略 | Recall@5 | MRR | Precision@5 | nDCG@5 | P50 / P95 | 子块数 |
 |---|---:|---:|---:|---:|---:|---:|
-| recursive-overlap | 0.935 | 0.804 | **0.357** | 0.831 | **1131 / 1476 ms** | 190 |
-| recursive-no-parent-overlap | 0.935 | 0.759 | 0.326 | 0.792 | 1118 / 1727 ms | 168 |
-| markdown-heading | 0.935 | **0.828** | 0.317 | **0.840** | 1213 / 2026 ms | 243 |
+| recursive-overlap | 0.935 | 0.815 | **0.357** | 0.838 | **1228 / 2056 ms** | 190 |
+| recursive-no-parent-overlap | 0.935 | 0.770 | 0.326 | 0.798 | 1244 / 1859 ms | 168 |
+| markdown-heading | 0.935 | **0.835** | 0.339 | **0.849** | 1147 / 2101 ms | 209 |
+
+生产路径（parent 级回表，`hybrid_retrieval_knowledge_base` → PostgreSQL → rerank）：
+
+| 策略 | Recall@5 | MRR | Precision@5 | nDCG@5 | P50 / P95 |
+|---|---:|---:|---:|---:|---:|
+| recursive-overlap | 0.935 | 0.855 | **0.383** | 0.862 | 1362 / 2441 ms |
+| recursive-no-parent-overlap | 0.957 | 0.797 | 0.361 | 0.827 | 1264 / 2645 ms |
+| markdown-heading | **0.978** | **0.874** | 0.374 | **0.880** | 1459 / 2924 ms |
 
 结构完整性（直接扫描 Milvus 子块）：
 
@@ -567,21 +578,23 @@ chunk_experiment.py
 |---|---:|---:|---:|---:|
 | recursive-overlap | 312 | 68 | 0.794 | 0.794 |
 | recursive-no-parent-overlap | 307 | 66 | 0.788 | 0.788 |
-| markdown-heading | 192 | 69 | **1.000** | **1.000** |
+| markdown-heading | 297 | 73 | **1.000** | **1.000** |
 
 相对 `recursive-overlap` 的配对 bootstrap 95% CI：
 
-- `markdown-heading`：ΔRecall +0.000（-0.065~+0.065）、ΔMRR +0.024（-0.033~+0.080）、ΔnDCG +0.009（-0.038~+0.056）、ΔPrecision **-0.039（-0.074~-0.009）**。
-- `recursive-no-parent-overlap`：ΔRecall 0、ΔMRR -0.045、ΔPrecision -0.030、ΔnDCG -0.039；去掉父块 overlap 后排序变差。
+- child 级 `markdown-heading`：ΔRecall +0.000（-0.065~+0.065）、ΔMRR +0.020（-0.056~+0.098）、ΔnDCG +0.011（-0.056~+0.077）、ΔPrecision -0.017（-0.052~+0.017）；Precision 降幅不再显著。
+- parent 级 `markdown-heading`：ΔRecall +0.043（0.000~+0.109）、ΔMRR +0.019（-0.043~+0.084）、ΔnDCG +0.018（-0.030~+0.073）、ΔPrecision -0.009（-0.039~+0.022）；方向正向，但 CI 触 0 / 跨 0，不能宣称显著。
+- 答案级 `no-judge` 确定性指标（56 条，46 可回答）：ExpectedContextCoverage 0.895→**0.917**、AllEvidenceHit 0.783→**0.826**、FactCoverage 0.795→**0.806**、ContextPrecision 0.497→0.485；完整 LLM Judge（正确率/忠实度/拒答）尚未跑，不能把这组数字当成完整答案质量结论。
 
 怎么读：
 
 - 结构切分**确实修好了表格**：表头保留率从约 0.79 提升到 1.00。
-- 但 Recall@5 没有提升，三组都是 0.935；剩下两个稳定 miss（`v-q011`、`v-q026`）是实体别名/关系题，不是 chunk 边界问题。
-- MRR/nDCG 略高，但 CI 跨 0；Precision 显著下降，因为 Markdown 章节普遍比 400 字短，产生了更多 100–200 字小 chunk，前 5 条更容易混入非证据块。
-- 索引子块数 243 vs 190，P95 延迟也更高。因此**不替换默认 `fine-overlap`**；`markdown-heading` 更适合表格/章节结构本身就是检索信号的 Markdown 知识库，下一步应做“短章节合并”或按文档调 child size。
+- 合并短章节后，child 级 Precision 不再显著下降；报告把“更多小 chunk”这个 v1 的主要副作用消掉了。
+- child 级 Recall 仍是 0.935；multi-hop 从 0.857 升到 1.000，但 single-hop 从 0.935 降到 0.903，净效果持平。稳定 miss（`v-q011`、`v-q026`）是实体别名/关系题，不是 chunk 边界问题。
+- parent 级生产路径上 `markdown-heading` 的 Recall/MRR/nDCG 都更高，但样本只有 50 题，CI 仍触 0，不能当作已证实的收益。
+- 因此**不替换默认 `fine-overlap`**；`markdown-heading` 可作为表格/章节结构重要的 Markdown 知识库的可选策略。下一步是答案级评测和更大语料复核。
 
-完整报告：[`docs/chunking-markdown-strategy.md`](chunking-markdown-strategy.md)。
+完整报告：[`docs/chunking-markdown-strategy-v2.md`](chunking-markdown-strategy-v2.md)；初版硬切对比保留在 [`docs/chunking-markdown-strategy.md`](chunking-markdown-strategy.md)。
 
 ### 5.3 答案评测
 
