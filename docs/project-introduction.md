@@ -27,7 +27,7 @@ Mnemo 是一个面向个人/小团队知识库的 RAG 问答系统：文档经�
 ### 三个下一步
 
 1. 加认证与租户隔离，默认只监听本机。
-2. 把分块实验扩展到答案质量和更多语料，再决定是否把默认 child 从 200/50 调到 400/0。
+2. 把分块实验扩展到答案质量和更多语料；结构感知策略先补“短章节合并/最小块”再复核，之后才决定是否调整默认 child 或 strategy。
 3. 补 10–15 条人工证据复核、CI、Alembic 迁移和 outbox。
 
 ---
@@ -229,15 +229,15 @@ Agent 的职责不是“直接回答问题”，而是决定：
 
 ### 3.5 文档入库与分块
 
-主要文件：`backend/documents_process.py`、`backend/chunking.py`
+主要文件：`backend/documents_process.py`、`backend/chunking.py`、`backend/markdown_chunking.py`
 
 流程：
 
 1. 上传临时文件，计算 SHA-256。
 2. 检查同用户、同知识库下是否已有文件。
 3. 写 `file_metadata`，状态 `processing`。
-4. 后台任务加载 PDF/DOCX。
-5. 父块切分 → 子块切分。
+4. 后台任务加载 PDF/DOCX/Markdown。
+5. 按策略执行父块切分 → 子块切分。
 6. 每个父块生成 UUID；每个子块记录 `parent_id`、`file_hash`、`file_name`。
 7. PostgreSQL 单事务写入：文件状态、父块、块哈希。
 8. Milvus 写入子块向量。
@@ -252,8 +252,11 @@ Agent 的职责不是“直接回答问题”，而是决定：
 
 上传界面提供命名策略：
 
-- `fine-overlap`：1000/200 + 200/50
-- `coarse-no-overlap`：1000/200 + 400/0
+- `fine-overlap`：recursive，1000/200 + 200/50
+- `coarse-no-overlap`：recursive，1000/200 + 400/0
+- `markdown-heading`：结构感知，1000/0 + 400/0，只接受 `.md`
+
+`markdown-heading` 先去掉 YAML front matter，再按 ATX 标题建立 `heading_path`；表格与代码块尽量整体保留，必须切表时每个子块重复表头；每个父/子块记录 `heading_path`、`start`、`end`、`block_type`。它用标题边界替代 overlap，因此父/子 overlap 必须为 0。
 
 第一次上传会把 profile/config 绑定到知识库；后续上传必须匹配，否则返回 409。旧知识库若已有文件但没有记录配置，会标记为 `legacy-unknown`，禁止继续追加，避免混合索引。
 
@@ -265,8 +268,9 @@ Agent 的职责不是“直接回答问题”，而是决定：
 
 已知问题：
 
-- 表格可能被切断，`q002`、`q004` 这类题会受影响。
-- 当前是字符切分，不是 token 切分，也不是语义/标题切分。
+- 默认 `recursive` 策略仍可能切断表格，`q002`、`q004` 这类题会受影响；`markdown-heading` 已把表格完整率作为专门目标。
+- 仍是字符预算，不是 token 预算；中英文混合时长度估计偏保守。
+- `markdown-heading` 只覆盖 Markdown；PDF/DOCX 尚未统一转 Markdown。
 - 失败文件如果进程崩溃卡在 `processing`，还没有 watchdog。
 
 ### 3.6 存储模型
@@ -409,9 +413,10 @@ Agent 的职责不是“直接回答问题”，而是决定：
 #### 分块实验
 
 - `chunk_experiment.py` 为每个配置建独立 KB、重新上传、跑 `run_eval`。
-- 默认三组：child 200/0、200/50、400/0。
-- 相对基线做配对 bootstrap 95% CI。
-- 生成 `docs/chunking-comparison.md`，包括指标、CI、hit/miss 翻转、基线未命中。
+- DOCX 尺寸实验三组：child 200/0、200/50、400/0。
+- Markdown 策略实验三组：recursive-overlap、recursive-no-parent-overlap、markdown-heading。
+- 相对基线做配对 bootstrap 95% CI，并统计子块数、表格完整性和分题型 Recall。
+- 生成 `docs/chunking-comparison.md` 和 `docs/chunking-markdown-strategy.md`，包括指标、CI、hit/miss 翻转、基线未命中。
 
 #### 运行身份
 
@@ -518,6 +523,8 @@ chunk_experiment.py
 
 ### 5.2 分块策略真实结果
 
+#### 5.2.1 DOCX 尺寸对比
+
 实验设置：
 
 - 12 份 DOCX
@@ -538,6 +545,43 @@ chunk_experiment.py
 - 200/50：ΔRecall +0.065（-0.022~+0.153）、ΔnDCG +0.049（-0.027~+0.133），不显著。
 
 结论：本次语料上 **400 字非重叠 child** 在检索指标和延迟上都最好；但这是 50 题、检索层的结论，不能直接说明答案质量最好。生产默认仍是 200/50，下一步应该用答案评测和更大语料复核，而不是只凭一次 50 题实验改默认。
+
+#### 5.2.2 结构感知 Markdown 对比
+
+为了避免“DOCX vs Markdown”的源格式混淆，第二组实验把同一份 12 篇 Markdown 语料分别用两种边界策略切分：
+
+- `recursive-overlap`：当前 `coarse-no-overlap` profile，1000/200 + 400/0。
+- `recursive-no-parent-overlap`：1000/0 + 400/0，用来隔离父块 overlap。
+- `markdown-heading`：结构感知，1000/0 + 400/0，按标题、段落、表格切分。
+- 同样的 `text-embedding-v4` / `qwen3.7-text-rerank`、50 题、child 级检索、`top_k=5`、`hybrid+rerank`。
+
+| 策略 | Recall@5 | MRR | Precision@5 | nDCG@5 | P50 / P95 | 子块数 |
+|---|---:|---:|---:|---:|---:|---:|
+| recursive-overlap | 0.935 | 0.804 | **0.357** | 0.831 | **1131 / 1476 ms** | 190 |
+| recursive-no-parent-overlap | 0.935 | 0.759 | 0.326 | 0.792 | 1118 / 1727 ms | 168 |
+| markdown-heading | 0.935 | **0.828** | 0.317 | **0.840** | 1213 / 2026 ms | 243 |
+
+结构完整性（直接扫描 Milvus 子块）：
+
+| 策略 | 中位长度 | 含表格子块 | 表头保留率 | 列数一致率 |
+|---|---:|---:|---:|---:|
+| recursive-overlap | 312 | 68 | 0.794 | 0.794 |
+| recursive-no-parent-overlap | 307 | 66 | 0.788 | 0.788 |
+| markdown-heading | 192 | 69 | **1.000** | **1.000** |
+
+相对 `recursive-overlap` 的配对 bootstrap 95% CI：
+
+- `markdown-heading`：ΔRecall +0.000（-0.065~+0.065）、ΔMRR +0.024（-0.033~+0.080）、ΔnDCG +0.009（-0.038~+0.056）、ΔPrecision **-0.039（-0.074~-0.009）**。
+- `recursive-no-parent-overlap`：ΔRecall 0、ΔMRR -0.045、ΔPrecision -0.030、ΔnDCG -0.039；去掉父块 overlap 后排序变差。
+
+怎么读：
+
+- 结构切分**确实修好了表格**：表头保留率从约 0.79 提升到 1.00。
+- 但 Recall@5 没有提升，三组都是 0.935；剩下两个稳定 miss（`v-q011`、`v-q026`）是实体别名/关系题，不是 chunk 边界问题。
+- MRR/nDCG 略高，但 CI 跨 0；Precision 显著下降，因为 Markdown 章节普遍比 400 字短，产生了更多 100–200 字小 chunk，前 5 条更容易混入非证据块。
+- 索引子块数 243 vs 190，P95 延迟也更高。因此**不替换默认 `fine-overlap`**；`markdown-heading` 更适合表格/章节结构本身就是检索信号的 Markdown 知识库，下一步应做“短章节合并”或按文档调 child size。
+
+完整报告：[`docs/chunking-markdown-strategy.md`](chunking-markdown-strategy.md)。
 
 ### 5.3 答案评测
 

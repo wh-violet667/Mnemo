@@ -70,14 +70,27 @@ Mnemo 围绕这两点做了四件事：
 
 结论：本次语料上 **400 字非重叠子块**在 Recall、Precision、nDCG 和延迟上都最好；overlap 50 有小幅正向但不显著。完整失败样本和解释见 [`docs/chunking-comparison.md`](docs/chunking-comparison.md)。
 
-上传界面还提供两个命名策略，方便直接做双组对比：
+第二组实验在同一份 12 篇 Markdown 上对比 `recursive` 与结构感知 `markdown-heading`（同为 1000/0 + 400/0）：
 
-| Profile | 父块 | 子块 |
-|---|---:|---:|
-| `fine-overlap` | 1000 / 200 | 200 / 50 |
-| `coarse-no-overlap` | 1000 / 200 | 400 / 0 |
+| 策略 | Recall@5 | MRR | Precision@5 | nDCG@5 | 子块数 |
+|---|---:|---:|---:|---:|---:|
+| `recursive-overlap` | 0.935 | 0.804 | **0.357** | 0.831 | 190 |
+| `recursive-no-parent-overlap` | 0.935 | 0.759 | 0.326 | 0.792 | 168 |
+| `markdown-heading` | 0.935 | **0.828** | 0.317 | **0.840** | 243 |
 
-`GET /chunking/profiles` 可读取策略列表；上传时传 `chunk_profile`，或继续使用显式数值参数进行自定义实验。两种传参方式不能同时使用。知识库第一次上传会绑定当前策略，后续上传必须匹配，否则返回 `409`，避免同一索引混用不同 chunk 配置。
+结构切分把表头保留率从约 **0.79** 提升到 **1.00**，但 Recall 没有提升，Precision 显著下降，索引和 P95 延迟更高；因此默认仍保留 `fine-overlap`。完整数据、CI 和失败样本见 [`docs/chunking-markdown-strategy.md`](docs/chunking-markdown-strategy.md)。
+
+上传界面提供三个命名策略，其中 `markdown-heading` 是结构感知的第二种分块策略：
+
+| Profile | strategy | 父块 | 子块 |
+|---|---|---:|---:|
+| `fine-overlap` | `recursive` | 1000 / 200 | 200 / 50 |
+| `coarse-no-overlap` | `recursive` | 1000 / 200 | 400 / 0 |
+| `markdown-heading` | `markdown-heading` | 1000 / 0 | 400 / 0 |
+
+`markdown-heading` 按 `#` / `##` 标题建立 `heading_path`，尽量保持表格和代码块完整；必须切表时会在每个子块重复表头。它只接受 `.md` 文件，并用标题边界替代 overlap。归一化后的 Markdown 结构对比见 [`docs/chunking-markdown-strategy.md`](docs/chunking-markdown-strategy.md)。
+
+`GET /chunking/profiles` 可读取策略列表；上传时传 `chunk_profile`，或继续使用显式数值参数（含 `strategy`）进行自定义实验。两种传参方式不能同时使用。知识库第一次上传会绑定当前策略，后续上传必须匹配，否则返回 `409`，避免同一索引混用不同 chunk 配置。
 
 旧知识库如果已有文件但没有记录 `chunk_config`，启动时会标记为 `legacy-unknown` 并禁止继续追加文件；请新建知识库（暂未提供自动迁移脚本）。
 
@@ -388,7 +401,7 @@ $env:MNEMO_API_BASE_URL="http://127.0.0.1:8010"
 ## 使用流程
 
 1. 创建一个知识库。
-2. 选择命名分块策略并上传 PDF / DOCX，等待后台解析、分块、向量化；文件状态会显示 `processing / ready / failed`。第一次上传会把策略绑定到该知识库，后续上传必须匹配；需要换策略时新建知识库。
+2. 选择命名分块策略并上传 PDF / DOCX / Markdown，等待后台解析、分块、向量化；文件状态会显示 `processing / ready / failed`。第一次上传会把策略绑定到该知识库，后续上传必须匹配；需要换策略时新建知识库。`markdown-heading` 只接受 `.md`。
 3. 选择知识库和检索模式（快速 / 自动 / 深入），提问。
 4. 回答下方显示本次执行摘要（模式 / 轮次 / 证据数 / 记忆使用 / 耗时）；点击 `[1]` 跳到来源卡片，卡片显示支持该 claim 的 quote 和段落定位，可展开/收起。
 5. 新建/切换会话，验证上下文隔离；会话右侧 `⋯` 可重命名。
@@ -476,7 +489,7 @@ python evals/answer_eval.py --no-judge --limit 10
 python -m pytest -q
 ```
 
-当前 100 个测试（含参数化），覆盖：
+当前 111 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
 - Recall@k / MRR / Precision@k / nDCG / 分位数
@@ -509,7 +522,9 @@ Mnemo/
 │   ├── auto_store_memory_from_psql.py  # 180s 记忆压缩任务
 │   ├── migrate_memory_v2.py     # 旧 memory_collection 迁移脚本
 │   ├── reindex_memories.py      # 从 PostgreSQL 重建 Milvus 记忆投影
-│   ├── documents_process.py     # PDF/Word 解析、分块、rerank
+│   ├── documents_process.py     # PDF/Word/Markdown 解析、分块、rerank
+│   ├── chunking.py              # chunk 配置、命名 profile、策略校验
+│   ├── markdown_chunking.py     # 标题/表格感知的 Markdown 分块
 │   ├── milvus_client.py         # Milvus 客户端与代理
 │   ├── postgresql_client.py     # PostgreSQL 客户端、表结构与记忆事务
 │   ├── redis_cache.py           # Redis 客户端
@@ -525,7 +540,8 @@ Mnemo/
 │   ├── answer-eval-report.md     # 56 条答案评测报告
 │   ├── answer-eval-summary.json  # 答案评测聚合指标
 │   ├── answer-eval-human-review.csv # 12 条人工抽检表
-│   ├── chunking-comparison.md    # 分块策略对比报告（脚本生成）
+│   ├── chunking-comparison.md    # DOCX 尺寸对比报告（脚本生成）
+│   ├── chunking-markdown-strategy.md # 结构感知 Markdown 策略对比（脚本生成）
 │   ├── project-introduction.md   # 项目介绍与答辩问答
 │   ├── index.html                # GitHub Pages 静态页面
 │   ├── windows-setup.md          # Windows/WSL/Docker 通用安装说明
@@ -549,7 +565,7 @@ Mnemo/
 │   ├── judges.py                # Judge A/B 提示词与解析
 │   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
-├── tests/                       # pytest（100 个测试）
+├── tests/                       # pytest（111 个测试）
 ├── scripts/                     # 网页生成、Agentic 冒烟
 │   ├── build_docs_site.py       # 从 Markdown 生成 GitHub Pages
 │   ├── smoke_agentic.py         # 真实模型 planner/critic 冒烟
@@ -578,7 +594,7 @@ Mnemo/
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 100 个测试
+- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 111 个测试
 - [x] 默认检索模式改为 `fast`，需要多轮时显式选择
 - [x] 答案评测：FactualCorrectness / Faithfulness / Citation / Refusal（violet 50 + 6 拒答）
 - [ ] 人工抽检 12–15 条并复核 Judge A/B

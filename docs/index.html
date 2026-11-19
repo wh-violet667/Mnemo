@@ -258,7 +258,7 @@
 <h3 id="_4">三个下一步</h3>
 <ol>
 <li>加认证与租户隔离，默认只监听本机。</li>
-<li>把分块实验扩展到答案质量和更多语料，再决定是否把默认 child 从 200/50 调到 400/0。</li>
+<li>把分块实验扩展到答案质量和更多语料；结构感知策略先补“短章节合并/最小块”再复核，之后才决定是否调整默认 child 或 strategy。</li>
 <li>补 10–15 条人工证据复核、CI、Alembic 迁移和 outbox。</li>
 </ol>
 <hr />
@@ -522,14 +522,14 @@
 <li>先召回 child，得到 <code>parent_id</code>，再回表取父块，最后统一 rerank。</li>
 </ul>
 <h3 id="35">3.5 文档入库与分块</h3>
-<p>主要文件：<code>backend/documents_process.py</code>、<code>backend/chunking.py</code></p>
+<p>主要文件：<code>backend/documents_process.py</code>、<code>backend/chunking.py</code>、<code>backend/markdown_chunking.py</code></p>
 <p>流程：</p>
 <ol>
 <li>上传临时文件，计算 SHA-256。</li>
 <li>检查同用户、同知识库下是否已有文件。</li>
 <li>写 <code>file_metadata</code>，状态 <code>processing</code>。</li>
-<li>后台任务加载 PDF/DOCX。</li>
-<li>父块切分 → 子块切分。</li>
+<li>后台任务加载 PDF/DOCX/Markdown。</li>
+<li>按策略执行父块切分 → 子块切分。</li>
 <li>每个父块生成 UUID；每个子块记录 <code>parent_id</code>、<code>file_hash</code>、<code>file_name</code>。</li>
 <li>PostgreSQL 单事务写入：文件状态、父块、块哈希。</li>
 <li>Milvus 写入子块向量。</li>
@@ -544,9 +544,11 @@
 </ul>
 <p>上传界面提供命名策略：</p>
 <ul>
-<li><code>fine-overlap</code>：1000/200 + 200/50</li>
-<li><code>coarse-no-overlap</code>：1000/200 + 400/0</li>
+<li><code>fine-overlap</code>：recursive，1000/200 + 200/50</li>
+<li><code>coarse-no-overlap</code>：recursive，1000/200 + 400/0</li>
+<li><code>markdown-heading</code>：结构感知，1000/0 + 400/0，只接受 <code>.md</code></li>
 </ul>
+<p><code>markdown-heading</code> 先去掉 YAML front matter，再按 ATX 标题建立 <code>heading_path</code>；表格与代码块尽量整体保留，必须切表时每个子块重复表头；每个父/子块记录 <code>heading_path</code>、<code>start</code>、<code>end</code>、<code>block_type</code>。它用标题边界替代 overlap，因此父/子 overlap 必须为 0。</p>
 <p>第一次上传会把 profile/config 绑定到知识库；后续上传必须匹配，否则返回 409。旧知识库若已有文件但没有记录配置，会标记为 <code>legacy-unknown</code>，禁止继续追加，避免混合索引。</p>
 <p>为什么父子块：</p>
 <ul>
@@ -556,8 +558,9 @@
 </ul>
 <p>已知问题：</p>
 <ul>
-<li>表格可能被切断，<code>q002</code>、<code>q004</code> 这类题会受影响。</li>
-<li>当前是字符切分，不是 token 切分，也不是语义/标题切分。</li>
+<li>默认 <code>recursive</code> 策略仍可能切断表格，<code>q002</code>、<code>q004</code> 这类题会受影响；<code>markdown-heading</code> 已把表格完整率作为专门目标。</li>
+<li>仍是字符预算，不是 token 预算；中英文混合时长度估计偏保守。</li>
+<li><code>markdown-heading</code> 只覆盖 Markdown；PDF/DOCX 尚未统一转 Markdown。</li>
 <li>失败文件如果进程崩溃卡在 <code>processing</code>，还没有 watchdog。</li>
 </ul>
 <h3 id="36">3.6 存储模型</h3>
@@ -754,9 +757,10 @@
 <h4 id="_13">分块实验</h4>
 <ul>
 <li><code>chunk_experiment.py</code> 为每个配置建独立 KB、重新上传、跑 <code>run_eval</code>。</li>
-<li>默认三组：child 200/0、200/50、400/0。</li>
-<li>相对基线做配对 bootstrap 95% CI。</li>
-<li>生成 <code>docs/chunking-comparison.md</code>，包括指标、CI、hit/miss 翻转、基线未命中。</li>
+<li>DOCX 尺寸实验三组：child 200/0、200/50、400/0。</li>
+<li>Markdown 策略实验三组：recursive-overlap、recursive-no-parent-overlap、markdown-heading。</li>
+<li>相对基线做配对 bootstrap 95% CI，并统计子块数、表格完整性和分题型 Recall。</li>
+<li>生成 <code>docs/chunking-comparison.md</code> 和 <code>docs/chunking-markdown-strategy.md</code>，包括指标、CI、hit/miss 翻转、基线未命中。</li>
 </ul>
 <h4 id="_14">运行身份</h4>
 <p>每次评测写 <code>_meta.json</code>：</p>
@@ -842,6 +846,7 @@ chunk_experiment.py
 </ul>
 <p>因此后来补了 <code>gold_evidence</code>，把评测从“文档级”升级为“证据级”。</p>
 <h3 id="52">5.2 分块策略真实结果</h3>
+<h4 id="521-docx">5.2.1 DOCX 尺寸对比</h4>
 <p>实验设置：</p>
 <ul>
 <li>12 份 DOCX</li>
@@ -898,6 +903,104 @@ chunk_experiment.py
 <li>200/50：ΔRecall +0.065（-0.022~+0.153）、ΔnDCG +0.049（-0.027~+0.133），不显著。</li>
 </ul>
 <p>结论：本次语料上 <strong>400 字非重叠 child</strong> 在检索指标和延迟上都最好；但这是 50 题、检索层的结论，不能直接说明答案质量最好。生产默认仍是 200/50，下一步应该用答案评测和更大语料复核，而不是只凭一次 50 题实验改默认。</p>
+<h4 id="522-markdown">5.2.2 结构感知 Markdown 对比</h4>
+<p>为了避免“DOCX vs Markdown”的源格式混淆，第二组实验把同一份 12 篇 Markdown 语料分别用两种边界策略切分：</p>
+<ul>
+<li><code>recursive-overlap</code>：当前 <code>coarse-no-overlap</code> profile，1000/200 + 400/0。</li>
+<li><code>recursive-no-parent-overlap</code>：1000/0 + 400/0，用来隔离父块 overlap。</li>
+<li><code>markdown-heading</code>：结构感知，1000/0 + 400/0，按标题、段落、表格切分。</li>
+<li>同样的 <code>text-embedding-v4</code> / <code>qwen3.7-text-rerank</code>、50 题、child 级检索、<code>top_k=5</code>、<code>hybrid+rerank</code>。</li>
+</ul>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>策略</th>
+<th style="text-align: right;">Recall@5</th>
+<th style="text-align: right;">MRR</th>
+<th style="text-align: right;">Precision@5</th>
+<th style="text-align: right;">nDCG@5</th>
+<th style="text-align: right;">P50 / P95</th>
+<th style="text-align: right;">子块数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>recursive-overlap</td>
+<td style="text-align: right;">0.935</td>
+<td style="text-align: right;">0.804</td>
+<td style="text-align: right;"><strong>0.357</strong></td>
+<td style="text-align: right;">0.831</td>
+<td style="text-align: right;"><strong>1131 / 1476 ms</strong></td>
+<td style="text-align: right;">190</td>
+</tr>
+<tr>
+<td>recursive-no-parent-overlap</td>
+<td style="text-align: right;">0.935</td>
+<td style="text-align: right;">0.759</td>
+<td style="text-align: right;">0.326</td>
+<td style="text-align: right;">0.792</td>
+<td style="text-align: right;">1118 / 1727 ms</td>
+<td style="text-align: right;">168</td>
+</tr>
+<tr>
+<td>markdown-heading</td>
+<td style="text-align: right;">0.935</td>
+<td style="text-align: right;"><strong>0.828</strong></td>
+<td style="text-align: right;">0.317</td>
+<td style="text-align: right;"><strong>0.840</strong></td>
+<td style="text-align: right;">1213 / 2026 ms</td>
+<td style="text-align: right;">243</td>
+</tr>
+</tbody>
+</table></div>
+<p>结构完整性（直接扫描 Milvus 子块）：</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>策略</th>
+<th style="text-align: right;">中位长度</th>
+<th style="text-align: right;">含表格子块</th>
+<th style="text-align: right;">表头保留率</th>
+<th style="text-align: right;">列数一致率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>recursive-overlap</td>
+<td style="text-align: right;">312</td>
+<td style="text-align: right;">68</td>
+<td style="text-align: right;">0.794</td>
+<td style="text-align: right;">0.794</td>
+</tr>
+<tr>
+<td>recursive-no-parent-overlap</td>
+<td style="text-align: right;">307</td>
+<td style="text-align: right;">66</td>
+<td style="text-align: right;">0.788</td>
+<td style="text-align: right;">0.788</td>
+</tr>
+<tr>
+<td>markdown-heading</td>
+<td style="text-align: right;">192</td>
+<td style="text-align: right;">69</td>
+<td style="text-align: right;"><strong>1.000</strong></td>
+<td style="text-align: right;"><strong>1.000</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>相对 <code>recursive-overlap</code> 的配对 bootstrap 95% CI：</p>
+<ul>
+<li><code>markdown-heading</code>：ΔRecall +0.000（-0.065~+0.065）、ΔMRR +0.024（-0.033~+0.080）、ΔnDCG +0.009（-0.038~+0.056）、ΔPrecision <strong>-0.039（-0.074~-0.009）</strong>。</li>
+<li><code>recursive-no-parent-overlap</code>：ΔRecall 0、ΔMRR -0.045、ΔPrecision -0.030、ΔnDCG -0.039；去掉父块 overlap 后排序变差。</li>
+</ul>
+<p>怎么读：</p>
+<ul>
+<li>结构切分<strong>确实修好了表格</strong>：表头保留率从约 0.79 提升到 1.00。</li>
+<li>但 Recall@5 没有提升，三组都是 0.935；剩下两个稳定 miss（<code>v-q011</code>、<code>v-q026</code>）是实体别名/关系题，不是 chunk 边界问题。</li>
+<li>MRR/nDCG 略高，但 CI 跨 0；Precision 显著下降，因为 Markdown 章节普遍比 400 字短，产生了更多 100–200 字小 chunk，前 5 条更容易混入非证据块。</li>
+<li>索引子块数 243 vs 190，P95 延迟也更高。因此<strong>不替换默认 <code>fine-overlap</code></strong>；<code>markdown-heading</code> 更适合表格/章节结构本身就是检索信号的 Markdown 知识库，下一步应做“短章节合并”或按文档调 child size。</li>
+</ul>
+<p>完整报告：<a href="chunking-markdown-strategy.md"><code>docs/chunking-markdown-strategy.md</code></a>。</p>
 <h3 id="53">5.3 答案评测</h3>
 <p>历史答案评测：56 条（46 可回答 + 10 不可回答），<code>qwen-plus</code> 生成 + <code>qwen-plus</code> Judge：</p>
 <ul>
@@ -1266,7 +1369,7 @@ python evals/chunk_experiment.py --dry-run
 </ul>
 <p>它仍然是单用户课程原型，安全、评测和一致性都有明确边界；但这些边界被写进了文档和实验，而不是藏在 Demo 里。这是这个项目最值得讲的部分。</p>
     <footer class="footer">
-      Mnemo · 课程项目介绍 · 生成日期 2026-11-18 · <a href="https://github.com/wh-violet667/Mnemo">GitHub</a>
+      Mnemo · 课程项目介绍 · 生成日期 2026-11-19 · <a href="https://github.com/wh-violet667/Mnemo">GitHub</a>
     </footer>
   </main>
 </div>

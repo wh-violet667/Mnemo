@@ -14,8 +14,8 @@
 data/violet-evergarden-kb/
 ```
 
-该目录被 `.gitignore` 忽略，不提交到公开仓库。共 12 份 DOCX 参与评测；`README.docx` 是语料说明，不上传，避免成为检索噪声。
-`evals/golden_violet.jsonl` 由 `evals/build_violet_golden.py` 从 `data/violet-evergarden-kb/data/qa-benchmark.zh.jsonl` 转换而来。
+该目录被 `.gitignore` 忽略，不提交到公开仓库。`docx/` 和 `docs/` 各含 12 份同内容评测文档；`README.docx` / `README.md` 是语料说明，不上传，避免成为检索噪声。
+`evals/golden_violet.jsonl` 由 `evals/build_violet_golden.py` 从 `data/violet-evergarden-kb/data/qa-benchmark.zh.jsonl` 转换而来；Markdown 实验复用同一套 `gold_evidence`，文件按 stem 匹配（`01-overview.md` ↔ `01-overview.docx`）。
 
 ## 2. 上传到知识库
 
@@ -23,6 +23,10 @@ data/violet-evergarden-kb/
 
 ```bash
 python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010
+
+# Markdown 语料 + 结构感知策略
+python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010 \
+  --format md --strategy markdown-heading --kb-id violet-kb-md
 ```
 
 默认知识库 ID 是 `violet-kb`，上传后会等待 12 份文件全部入库。
@@ -116,7 +120,16 @@ python evals/chunk_experiment.py --configs evals/chunk_configs.json --run-id chu
 
 # 先跑 10 条 pilot
 python evals/chunk_experiment.py --limit 10 --run-id chunk-pilot
+
+# 同一份 Markdown 语料对比 recursive 与结构感知 markdown-heading
+python evals/chunk_experiment.py --experiment markdown-strategy --run-id md-strategy
 ```
+
+`markdown-strategy` 使用 `docs/` 下的 12 个 `.md`，三组配置分别为
+`recursive-overlap`（1000/200 + 400/0）、`recursive-no-parent-overlap`
+（1000/0 + 400/0）和 `markdown-heading`（1000/0 + 400/0）。后两组
+尺寸完全相同，唯一变量是分块边界策略；报告写入
+`docs/chunking-markdown-strategy.md`。
 
 脚本会为每个配置建独立知识库、重新上传语料、跑 `run_eval`，最后生成
 [`docs/chunking-comparison.md`](../docs/chunking-comparison.md)：

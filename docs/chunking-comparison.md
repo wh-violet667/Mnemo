@@ -2,6 +2,7 @@
 
 > run: `real-20261116`；同一语料、同一 embedding/rerank 模型，只改 chunk 配置。
 > `gold_evidence` 为自动生成标签，本次已修正别名题 `v-q047` 的误匹配；正式提交前仍建议人工抽检 10–15 条。
+> 本报告是 **DOCX 尺寸对比**；结构感知 Markdown 策略对比见 [`chunking-markdown-strategy.md`](chunking-markdown-strategy.md)。
 
 ## 实验配置
 
