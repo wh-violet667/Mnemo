@@ -1,7 +1,9 @@
 """Build the GitHub Pages version of docs/project-introduction.md.
 
-The Markdown file stays the source of truth.  GitHub Actions runs this script
-and publishes ``docs/index.html`` through GitHub Pages.
+The Markdown file stays the source of truth.  Run this script after changing
+the introduction, then commit the generated ``docs/index.html`` for GitHub
+Pages.  Headline numbers (tests/questions/recall/Q&A) are read from their
+source files instead of being hardcoded here.
 """
 
 from __future__ import annotations
@@ -16,6 +18,13 @@ import markdown
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "docs" / "project-introduction.md"
 OUTPUT = ROOT / "docs" / "index.html"
+README = ROOT / "README.md"
+GOLDEN = ROOT / "evals" / "golden_violet.jsonl"
+CHUNK_REPORT = ROOT / "docs" / "chunking-comparison.md"
+ANSWER_SUMMARY_SOURCE = (
+    ROOT / "evals" / "results" / "answer_violet_full2_summary.json"
+)
+ANSWER_SUMMARY_TARGET = ROOT / "docs" / "answer-eval-summary.json"
 
 REPO_URL = "https://github.com/wh-violet667/Mnemo"
 PAGES_URL = "https://wh-violet667.github.io/Mnemo/"
@@ -32,6 +41,65 @@ def build_nav(toc_tokens) -> str:
         if name and anchor:
             links.append(f'<a href="#{anchor}">{html.escape(name)}</a>')
     return "\n".join(links)
+
+
+def site_stats() -> dict[str, str]:
+    """Read the page's headline numbers from their source of truth."""
+
+    tests = "—"
+    try:
+        match = re.search(
+            r"(\d+)\s*个测试",
+            README.read_text(encoding="utf-8"),
+        )
+        if match:
+            tests = match.group(1)
+    except OSError:
+        pass
+
+    questions = "—"
+    try:
+        questions = str(
+            sum(
+                1
+                for line in GOLDEN.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+        )
+    except OSError:
+        pass
+
+    best_recall = "—"
+    try:
+        for line in CHUNK_REPORT.read_text(encoding="utf-8").splitlines():
+            if not line.startswith("|") or "child-400-o0" not in line:
+                continue
+            cells = [cell.strip().strip("*") for cell in line.strip("|").split("|")]
+            if len(cells) > 2 and re.fullmatch(r"\d\.\d+", cells[2]):
+                best_recall = cells[2]
+                break
+    except OSError:
+        pass
+
+    qa_count = "—"
+    try:
+        qa_count = str(
+            len(
+                re.findall(
+                    r"\*\*Q\d+\s*\(EN\)",
+                    SOURCE.read_text(encoding="utf-8"),
+                )
+            )
+        )
+    except OSError:
+        pass
+
+    return {
+        "tests": tests,
+        "questions": questions,
+        "best_recall": best_recall,
+        "qa": qa_count,
+    }
 
 
 def build_page(body_markdown: str) -> str:
@@ -251,10 +319,10 @@ def build_page(body_markdown: str) -> str:
       <span>PostgreSQL</span><span>Redis</span><span>Streamlit</span>
     </div>
     <div class="stats">
-      <div class="stat"><strong>97</strong><span>单元测试</span></div>
-      <div class="stat"><strong>50</strong><span>评测问题</span></div>
-      <div class="stat"><strong>0.957</strong><span>最佳 Recall@5</span></div>
-      <div class="stat"><strong>48</strong><span>答辩问答</span></div>
+      <div class="stat"><strong>__TESTS__</strong><span>单元测试</span></div>
+      <div class="stat"><strong>__QUESTIONS__</strong><span>评测问题</span></div>
+      <div class="stat"><strong>__BEST_RECALL__</strong><span>最佳 Recall@5</span></div>
+      <div class="stat"><strong>__QA__</strong><span>答辩问答</span></div>
     </div>
     <div class="hero-actions">
       <a class="button primary" href="__REPO__">GitHub 仓库</a>
@@ -318,16 +386,37 @@ def build_page(body_markdown: str) -> str:
 </body>
 </html>
 """
+    stats = site_stats()
     return (
         template.replace("__REPO__", REPO_URL)
         .replace("__MARKDOWN__", MARKDOWN_URL)
         .replace("__NAV__", nav)
         .replace("__CONTENT__", content)
+        .replace("__TESTS__", stats["tests"])
+        .replace("__QUESTIONS__", stats["questions"])
+        .replace("__BEST_RECALL__", stats["best_recall"])
+        .replace("__QA__", stats["qa"])
         .replace("__DATE__", date.today().isoformat())
     )
 
 
+def sync_answer_summary() -> None:
+    """Refresh the published summary when the local eval result exists."""
+
+    if not ANSWER_SUMMARY_SOURCE.exists():
+        return
+    source_bytes = ANSWER_SUMMARY_SOURCE.read_bytes()
+    if (
+        ANSWER_SUMMARY_TARGET.exists()
+        and ANSWER_SUMMARY_TARGET.read_bytes() == source_bytes
+    ):
+        return
+    ANSWER_SUMMARY_TARGET.write_bytes(source_bytes)
+    print(f"synced {ANSWER_SUMMARY_TARGET} from {ANSWER_SUMMARY_SOURCE}")
+
+
 def main() -> None:
+    sync_answer_summary()
     text = SOURCE.read_text(encoding="utf-8")
     start = text.find("## 0.")
     if start < 0:

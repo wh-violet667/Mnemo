@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GOLDEN = ROOT / "evals" / "golden_violet.jsonl"
 DEFAULT_CORPUS = ROOT / "data" / "violet-evergarden-kb"
 DEFAULT_REPORT = ROOT / "docs" / "chunking-comparison.md"
-MARKDOWN_REPORT = ROOT / "docs" / "chunking-markdown-strategy.md"
+MARKDOWN_REPORT = ROOT / "docs" / "chunking-markdown-strategy-v2.md"
 
 DOCX_CONFIGS: List[Dict[str, Any]] = [
     {

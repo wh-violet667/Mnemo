@@ -132,7 +132,6 @@ class DocumentProcessor:
             add_start_index=False,
             separators=list(self.chunk_config.separators),
         )
-        self.temp_dir = os.getenv("TEMP_DIR", "/tmp")
         self.hash_storage = hash_storage
         # 修改：不再直接创建实例，延迟初始化
         self._milvus_client = None

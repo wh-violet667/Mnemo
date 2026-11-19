@@ -603,49 +603,6 @@ class MemoryManager:
             vectors,
         )
 
-    async def list_memories(
-        self,
-        user_id: int,
-        memory_type: Optional[str] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """按用户读取长期记忆，供前端记忆抽屉展示。"""
-
-        filter_expr = f"user_id == {int(user_id)} and status == 'active'"
-        if memory_type:
-            filter_expr += f" and memory_type == '{memory_type}'"
-
-        rows = await self.client.query(
-            collection_name=self.collection_name,
-            filter=filter_expr,
-            output_fields=[
-                "id",
-                "memory_type",
-                "content",
-                "summary_id",
-                "importance",
-                "created_at",
-                "last_access_at",
-            ],
-            limit=max(1, min(int(limit), 200)),
-        )
-
-        memories = []
-        for row in rows:
-            memories.append(
-                {
-                    "id": str(row.get("id")),
-                    "memory_type": row.get("memory_type"),
-                    "content": row.get("content") or "",
-                    "summary_id": row.get("summary_id"),
-                    "importance": row.get("importance"),
-                    "created_at": row.get("created_at"),
-                    "last_access_at": row.get("last_access_at"),
-                }
-            )
-
-        memories.sort(key=lambda item: item.get("created_at") or 0, reverse=True)
-        return memories
 
     async def set_memory_status(self, memory_ids: List[str], status: str) -> bool:
         """更新 Milvus 投影里的状态；只更新已存在的行。"""

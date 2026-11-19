@@ -164,14 +164,6 @@ class AsyncMilvusClientWrapper:
         """找出应被替换的旧记忆 - 代理到 memory_manager"""
         return await self.memory_manager.find_superseded_candidates(items, user_id)
 
-    async def list_memories(
-        self, user_id: int, memory_type: str = None, limit: int = 100
-    ):
-        """读取长期记忆 - 代理到 memory_manager"""
-        return await self.memory_manager.list_memories(
-            user_id=user_id, memory_type=memory_type, limit=limit
-        )
-
     async def set_memory_status(self, memory_ids: list[str], status: str) -> bool:
         """更新记忆状态 - 代理到 memory_manager"""
         return await self.memory_manager.set_memory_status(memory_ids, status)

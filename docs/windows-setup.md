@@ -55,7 +55,7 @@ docker compose ps
 ## 5. 配置环境变量
 
 ```powershell
-copy .env.example .env
+copy .env.docker.example .env
 ```
 
 至少填写：
@@ -63,9 +63,10 @@ copy .env.example .env
 - `OPENCODE_API_KEY`：对话模型
 - `DASHSCOPE_API_KEY`：embedding / rerank
 - `Milvus_url`、`Token`：Milvus/Zilliz 连接
-- `DATABASE_URL`、`REDIS_URL`：默认与 `docker-compose.yml` 对应
 
-不要提交 `.env`。仓库只保留 `.env.example`。
+`DATABASE_URL`、`REDIS_URL` 在 `.env.docker.example` 里已按 `docker-compose.yml` 的 `mnemo:mnemo` 默认值填好；如果你改了 compose 配置，再同步修改这两项。`.env.example` 是手工部署/自定义环境的模板，里面的 `user:pass` 是占位符，不能直接用于 docker compose。
+
+不要提交 `.env`。仓库只保留 `.env.example` / `.env.docker.example`。
 
 ## 6. 启动后端
 

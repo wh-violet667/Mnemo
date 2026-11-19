@@ -1,5 +1,5 @@
 # hash_storage.py
-from typing import Any, Dict, Optional, Set, List
+from typing import Any, Dict, Optional
 import logging
 from postgresql_client import get_postgresql_client
 
@@ -24,11 +24,6 @@ class HashStorage:
         return self._pg_client
     
     # ============ 文件哈希管理 ============
-    
-    async def is_file_duplicate(self, file_hash: str, knowledge_base_id: str, user_id: int) -> bool:
-        """检查文件哈希是否已存在"""
-        client = await self._get_pg_client()
-        return await client.is_file_duplicate(file_hash, knowledge_base_id, user_id)
 
     async def get_file_status(
         self, file_hash: str, knowledge_base_id: str, user_id: int
@@ -56,40 +51,3 @@ class HashStorage:
             chunk_profile=chunk_profile,
             chunk_config=chunk_config,
         )
-    
-    # ============ 块哈希管理 ============
-    
-    async def batch_check_duplicates(self, chunk_hashes: List[str], file_hash: str, knowledge_base_id: str, user_id: int) -> Set[str]:
-        """
-        批量检查分块哈希是否已被同一用户的其他文件使用
-        
-        Args:
-            chunk_hashes: 哈希值列表
-            file_hash: 当前文件的哈希值（用于排除自身）
-            knowledge_base_id: 知识库ID
-            user_id: 用户ID
-            
-        Returns:
-            已被其他文件使用过的哈希值集合
-        """
-        if not chunk_hashes:
-            return set()
-        
-        client = await self._get_pg_client()
-        return await client.batch_check_chunk_duplicates(chunk_hashes, file_hash, knowledge_base_id, user_id)
-    
-    async def batch_add_chunk_hashes(self, chunk_hashes: List[str], file_hash: str, knowledge_base_id: str, user_id: int):
-        """
-        批量添加分块哈希，关联到指定文件
-        
-        Args:
-            chunk_hashes: 哈希值列表
-            file_hash: 文件哈希值
-            knowledge_base_id: 知识库ID
-            user_id: 用户ID
-        """
-        if not chunk_hashes:
-            return
-        
-        client = await self._get_pg_client()
-        await client.batch_add_chunk_hashes(chunk_hashes, file_hash, knowledge_base_id, user_id)
