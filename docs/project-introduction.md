@@ -417,7 +417,8 @@ Agent 的职责不是“直接回答问题”，而是决定：
 - Markdown 策略实验三组：recursive-overlap、recursive-no-parent-overlap、markdown-heading。
 - 相对基线做配对 bootstrap 95% CI，并统计子块数、表格完整性和分题型 Recall。
 - `--parent-eval` 额外跑生产回表路径（parent 级），避免只看 child 检索。
-- 生成 `docs/chunking-comparison.md`、`docs/chunking-markdown-strategy.md`（初版）和 `docs/chunking-markdown-strategy-v2.md`（短章节合并版），包括指标、CI、hit/miss 翻转、基线未命中。
+- 生成 `docs/chunking-comparison.md` 和 `docs/chunking-markdown-strategy-v2.md`，包括指标、CI、hit/miss 翻转、基线未命中；初版硬切报告归档在 `docs/archive/`。
+- 三组核心实验的统一梳理见 `docs/experiments.md`。
 
 #### 运行身份
 
@@ -592,9 +593,9 @@ chunk_experiment.py
 - 合并短章节后，child 级 Precision 不再显著下降；报告把“更多小 chunk”这个 v1 的主要副作用消掉了。
 - child 级 Recall 仍是 0.935；multi-hop 从 0.857 升到 1.000，但 single-hop 从 0.935 降到 0.903，净效果持平。稳定 miss（`v-q011`、`v-q026`）是实体别名/关系题，不是 chunk 边界问题。
 - parent 级生产路径上 `markdown-heading` 的 Recall/MRR/nDCG 都更高，但样本只有 50 题，CI 仍触 0，不能当作已证实的收益。
-- 因此**不替换默认 `fine-overlap`**；`markdown-heading` 可作为表格/章节结构重要的 Markdown 知识库的可选策略。下一步是答案级评测和更大语料复核。
+- 因此**不替换默认 `fine-overlap`**；`markdown-heading` 可作为表格/章节结构重要的 Markdown 知识库的可选策略。下一步是完整 LLM Judge 答案评测和更大语料复核。
 
-完整报告：[`docs/chunking-markdown-strategy-v2.md`](chunking-markdown-strategy-v2.md)；初版硬切对比保留在 [`docs/chunking-markdown-strategy.md`](chunking-markdown-strategy.md)。
+完整报告：[`docs/chunking-markdown-strategy-v2.md`](chunking-markdown-strategy-v2.md)；初版硬切报告归档在 [`docs/archive/chunking-markdown-strategy.md`](archive/chunking-markdown-strategy.md)；三组核心实验总览见 [`docs/experiments.md`](experiments.md)。
 
 ### 5.3 答案评测
 

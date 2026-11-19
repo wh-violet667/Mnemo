@@ -36,22 +36,9 @@ Mnemo 围绕这两点做了四件事：
 
 ## 可验证的结果
 
-50 条 violet 语料问题的检索评测（`violet-kb`，12 份 DOCX，k=5）：
+项目做过三组核心实验：检索模式、答案质量、分块策略。统一口径和全部数字见 [`docs/experiments.md`](docs/experiments.md)。
 
-> 下表是加入 `gold_evidence` 之前的文档级历史结果。现在 `run_eval.py` 默认按证据 quote 覆盖率判定，并支持 `--granularity child`；旧数字不能直接和新结果比较。
-
-| 模式 | Recall@5 | MRR | P50 | P95 |
-|---|---:|---:|---:|---:|
-| baseline（hybrid+rerank） | 1.000 | 0.832 | 2208 ms | 2457 ms |
-| fast | 1.000 | 0.849 | 2261 ms | 2620 ms |
-| deep | 1.000 | 0.845 | 7783 ms | 12193 ms |
-| auto | 1.000 | 0.849 | 2302 ms | 8371 ms |
-
-- Recall@5 在这套语料上已经饱和，差异主要体现在 **MRR**。
-- `fast` 的 MRR 略高于 baseline，但 **deep / auto 没有继续提升**；deep 的 P95 约 12 秒，auto 约 8 秒，约为 fast 的 4–5 倍。
-- 因此当前 Agentic-lite 的价值是**可控的多轮轨迹和可观测性**，不是已经被数据证明的质量提升。
-- 当前默认模式是 `fast`；需要多轮反思时显式选择 `auto` 或 `deep`。
-- 上表是旧文档级标签；现在 `golden_violet.jsonl` 带 `gold_evidence`，重跑后按证据 quote 覆盖率判定，旧数字不能直接对比。答案级指标见下节。
+早期文档级标签下，baseline/fast/deep/auto 的 Recall@5 都是 1.000，MRR 在 0.832–0.849 之间；`deep`/`auto` 没有继续提升，P95 却高 4–5 倍，因此默认改成 `fast`。这组是旧文档级标签，**不能**和后面的证据级结果直接比较，所以这里不再展开表格。答案级指标见下节。
 
 ### 分块策略对比
 
@@ -78,7 +65,7 @@ Mnemo 围绕这两点做了四件事：
 | `recursive-no-parent-overlap` | 0.935 | 0.770 | 0.326 | 0.798 | 168 |
 | `markdown-heading` | 0.935 | **0.835** | 0.339 | **0.849** | 209 |
 
-生产路径（parent 级回表）上，`markdown-heading` 的 Recall 为 **0.978**、MRR **0.874**、nDCG **0.880**，高于基线的 0.935 / 0.855 / 0.862；但 ΔRecall 的 95% CI 下界为 0，不能宣称显著。答案级 `no-judge` 确定性指标也同方向：ExpectedContextCoverage 0.895→**0.917**、AllEvidenceHit 0.783→**0.826**、FactCoverage 0.795→**0.806**，ContextPrecision 0.497→0.485；完整 LLM Judge 尚未跑。结构切分把表头保留率从约 **0.79** 提升到 **1.00**，child 级 Precision 降幅也收窄到不显著（-0.017，CI -0.052~+0.017）。因此默认仍保留 `fine-overlap`；`markdown-heading` 可作为 Markdown 知识库的可选策略。完整数据、CI 和失败样本见 [`docs/chunking-markdown-strategy-v2.md`](docs/chunking-markdown-strategy-v2.md)。
+生产路径（parent 级回表）上，`markdown-heading` 的 Recall 为 **0.978**、MRR **0.874**、nDCG **0.880**，高于基线的 0.935 / 0.855 / 0.862；但 ΔRecall 的 95% CI 下界为 0，不能宣称显著。答案级 `no-judge` 确定性指标也同方向，详见报告附录 A；完整 LLM Judge 尚未跑。结构切分把表头保留率从约 **0.79** 提升到 **1.00**，child 级 Precision 降幅也收窄到不显著（-0.017，CI -0.052~+0.017）。因此默认仍保留 `fine-overlap`；`markdown-heading` 可作为 Markdown 知识库的可选策略。完整数据、CI 和失败样本见 [`docs/chunking-markdown-strategy-v2.md`](docs/chunking-markdown-strategy-v2.md)。
 
 上传界面提供三个命名策略，其中 `markdown-heading` 是结构感知的第二种分块策略：
 
@@ -88,7 +75,7 @@ Mnemo 围绕这两点做了四件事：
 | `coarse-no-overlap` | `recursive` | 1000 / 200 | 400 / 0 |
 | `markdown-heading` | `markdown-heading` | 1000 / 0 | 400 / 0 |
 
-`markdown-heading` 按 `#` / `##` 标题建立 `heading_path`，同一一级标题下的相邻短章节会合并到同一父/子块，标题行保留；表格和代码块尽量完整，必须切表时每个子块重复表头。它只接受 `.md` 文件，并用标题边界替代 overlap。当前实现对比见 [`docs/chunking-markdown-strategy-v2.md`](docs/chunking-markdown-strategy-v2.md)，初版硬切结果保留在 [`docs/chunking-markdown-strategy.md`](docs/chunking-markdown-strategy.md)。
+`markdown-heading` 按 `#` / `##` 标题建立 `heading_path`，同一一级标题下的相邻短章节会合并到同一父/子块，标题行保留；表格和代码块尽量完整，必须切表时每个子块重复表头。它只接受 `.md` 文件，并用标题边界替代 overlap。当前实现对比见 [`docs/chunking-markdown-strategy-v2.md`](docs/chunking-markdown-strategy-v2.md)，初版硬切报告已归档到 [`docs/archive/chunking-markdown-strategy.md`](docs/archive/chunking-markdown-strategy.md)。
 
 `GET /chunking/profiles` 可读取策略列表；上传时传 `chunk_profile`，或继续使用显式数值参数（含 `strategy`）进行自定义实验。两种传参方式不能同时使用。知识库第一次上传会绑定当前策略，后续上传必须匹配，否则返回 `409`，避免同一索引混用不同 chunk 配置。
 
@@ -540,9 +527,11 @@ Mnemo/
 │   ├── answer-eval-report.md     # 56 条答案评测报告
 │   ├── answer-eval-summary.json  # 答案评测聚合指标
 │   ├── answer-eval-human-review.csv # 12 条人工抽检表
+│   ├── experiments.md            # 三组核心实验的统一叙事
 │   ├── chunking-comparison.md    # DOCX 尺寸对比报告（脚本生成）
-│   ├── chunking-markdown-strategy.md # 结构感知 Markdown 初版（按标题硬切）
 │   ├── chunking-markdown-strategy-v2.md # 短章节合并版（当前实现）
+│   ├── archive/
+│   │   └── chunking-markdown-strategy.md # v1 硬切报告（已归档）
 │   ├── project-introduction.md   # 项目介绍与答辩问答
 │   ├── index.html                # GitHub Pages 静态页面
 │   ├── windows-setup.md          # Windows/WSL/Docker 通用安装说明

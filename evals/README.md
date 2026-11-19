@@ -134,8 +134,9 @@ python evals/chunk_experiment.py --experiment markdown-strategy \
 （1000/0 + 400/0）和 `markdown-heading`（1000/0 + 400/0）。后两组
 尺寸完全相同，唯一变量是分块边界策略。`markdown-heading` 会把同一
 一级标题下的相邻短章节合并，避免按 H2 硬切产生大量小 chunk。报告写入
-`docs/chunking-markdown-strategy-v2.md`；初版硬切结果保留在
-`docs/chunking-markdown-strategy.md`。
+`docs/chunking-markdown-strategy-v2.md`；初版硬切结果归档在
+`docs/archive/chunking-markdown-strategy.md`；三组核心实验的统一梳理见
+`docs/experiments.md`。
 
 脚本会为每个配置建独立知识库、重新上传语料、跑 `run_eval`，最后生成
 报告：

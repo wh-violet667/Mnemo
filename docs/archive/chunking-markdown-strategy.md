@@ -1,7 +1,7 @@
-# Chunking 策略对比：结构感知 Markdown（初版）
+# Chunking 策略对比：结构感知 Markdown（初版，已归档）
 
 > run: `md-strategy-20261119`；同一 Markdown 语料、同一 embedding/rerank 模型，只改 chunk 配置。
-> 本报告是**按标题硬切的初版**：短章节会产生大量小 chunk。加入短章节合并后的当前实现见 [`chunking-markdown-strategy-v2.md`](chunking-markdown-strategy-v2.md)。
+> **归档说明**：本报告是“按 `##` 标题硬切”的初版，短章节会产生大量小 chunk。当前实现已改为短章节合并版，见 [`../chunking-markdown-strategy-v2.md`](../chunking-markdown-strategy-v2.md)；三组核心实验的统一梳理见 [`../experiments.md`](../experiments.md)。
 
 ## 实验配置
 

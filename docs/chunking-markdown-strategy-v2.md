@@ -1,7 +1,7 @@
 # Chunking 策略对比：结构感知 Markdown（短章节合并版）
 
 > run: `md-merge-20261119`；同一 Markdown 语料、同一 embedding/rerank 模型，只改 chunk 配置。
-> 本报告是**短章节合并版**（当前实现）；初版按标题硬切的结果见 [`chunking-markdown-strategy.md`](chunking-markdown-strategy.md)。
+> 本报告是**短章节合并版**（当前实现）；初版按标题硬切的结果已归档到 [`archive/chunking-markdown-strategy.md`](archive/chunking-markdown-strategy.md)。三组核心实验的统一梳理见 [`experiments.md`](experiments.md)。
 
 ## 实验配置
 
@@ -50,17 +50,6 @@ child 级只用于隔离 chunk 边界；parent 级才走生产路径：`hybrid_r
 |---|---:|---:|---:|---:|
 | `recursive-no-parent-overlap` | +0.022 [+0.000, +0.065] | -0.058 [-0.123, +0.004] | -0.022 [-0.048, +0.004] | -0.036 [-0.078, +0.011] |
 | `markdown-heading` | +0.043 [+0.000, +0.109] | +0.019 [-0.043, +0.084] | -0.009 [-0.039, +0.022] | +0.018 [-0.030, +0.073] |
-
-## 答案级确定性指标（no-judge）
-
-> 56 条（46 可回答 + 10 不可回答），`fast` / `top_k=5`；关闭 LLM Judge，因此只报告检索覆盖、事实覆盖和引用有效性，不报告答案正确率 / 忠实度 / 拒答准确率。
-
-| 策略 | Hit@5 | MRR | ExpectedContextCoverage | AllEvidenceHit | ContextPrecision | FactCoverage | CitationValidity | 平均耗时 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `recursive-overlap` | 1.000 | 0.925 | 0.895 | 0.783 | 0.497 | 0.795 | 1.000 | 5107 ms |
-| `markdown-heading` | 1.000 | 0.928 | **0.917** | **0.826** | 0.485 | **0.806** | 1.000 | 5077 ms |
-
-两端到端指标方向一致：`markdown-heading` 的上下文覆盖率、全证据命中率和事实覆盖率略高，ContextPrecision 略低 0.012；差距很小，只能作为方向性证据，不能替代完整的 Judge 答案评测。
 
 本次索引规模（PostgreSQL 统计）：
 
@@ -147,6 +136,17 @@ child 级只用于隔离 chunk 边界；parent 级才走生产路径：`hybrid_r
 
 - 结构切分确实生效：表格子块的表头保留率和列数一致率明显高于递归策略（见上表）。
 - 但 Recall@5 没有提升；MRR/nDCG 的正向变化 95% CI 跨 0；Precision 的下降幅度见表，需结合 CI 判断是否显著。
-- 因此**不替换默认 `fine-overlap`**。`markdown-heading` 适合章节/表格结构本身就是检索信号的 Markdown 知识库；下一步应做答案级评测和更大语料复核，再决定是否调整默认策略。
+- 因此**不替换默认 `fine-overlap`**。`markdown-heading` 适合章节/表格结构本身就是检索信号的 Markdown 知识库；下一步应做完整 LLM Judge 答案评测和更大语料复核，再决定是否调整默认策略。
 
 > 单次 50 题评测仍有抽样波动；本报告的 95% CI 是配对 bootstrap，解释时应同时看区间和效应量。
+
+## 附录 A：答案级确定性指标（no-judge）
+
+> 56 条（46 可回答 + 10 不可回答），`fast` / `top_k=5`；关闭 LLM Judge，因此只报告检索覆盖、事实覆盖和引用有效性，不报告答案正确率 / 忠实度 / 拒答准确率。
+
+| 策略 | Hit@5 | MRR | ExpectedContextCoverage | AllEvidenceHit | ContextPrecision | FactCoverage | CitationValidity | 平均耗时 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `recursive-overlap` | 1.000 | 0.925 | 0.895 | 0.783 | 0.497 | 0.795 | 1.000 | 5107 ms |
+| `markdown-heading` | 1.000 | 0.928 | **0.917** | **0.826** | 0.485 | **0.806** | 1.000 | 5077 ms |
+
+两端到端指标方向一致：`markdown-heading` 的上下文覆盖率、全证据命中率和事实覆盖率略高，ContextPrecision 略低 0.012；差距很小，只能作为方向性证据，不能替代完整的 Judge 答案评测。
