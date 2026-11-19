@@ -842,6 +842,11 @@ def fetch_chunk_profiles() -> List[Dict[str, Any]]:
         return [
             {"name": "fine-overlap", "child_chunk_size": 200, "child_chunk_overlap": 50},
             {"name": "coarse-no-overlap", "child_chunk_size": 400, "child_chunk_overlap": 0},
+            {
+                "name": "markdown-heading",
+                "child_chunk_size": 400,
+                "child_chunk_overlap": 0,
+            },
         ]
 
 
@@ -2108,7 +2113,7 @@ def render_sidebar() -> None:
                     )
                 uploaded = st.file_uploader(
                     "上传文档",
-                    type=["pdf", "docx", "doc"],
+                    type=["pdf", "docx", "doc", "md"],
                     key=f"upload_{selected_kb}",
                     label_visibility="collapsed",
                 )

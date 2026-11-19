@@ -359,6 +359,7 @@ class KnowledgeBaseManager:
                 "file_name": metadata.get("file_name") or "",
                 "text": entity.get("text") or "",
                 "score": hit.get("distance"),
+                "metadata": metadata,
             }
 
         if mode != "hybrid":

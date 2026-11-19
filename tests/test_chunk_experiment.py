@@ -1,4 +1,4 @@
-from evals.chunk_experiment import build_report, paired_bootstrap_ci
+from evals.chunk_experiment import _table_quality, build_report, paired_bootstrap_ci
 
 
 def test_paired_bootstrap_ci_is_deterministic():
@@ -52,3 +52,10 @@ def test_build_report_contains_metrics_and_flip_case():
     assert "ΔRecall" in markdown
     assert "q1" in markdown
     assert "best_overlap" in markdown
+
+
+def test_table_quality_flags_broken_table_fragments():
+    assert _table_quality("正文没有表格") is None
+    assert _table_quality("| a | b |\n|---|---|\n| 1 | 2 |") == (True, True)
+    assert _table_quality("| a | b |\n| 1 | 2 |") == (False, False)
+    assert _table_quality("| a | b |\n|---|---|\n| 1 | 2 | 3 |") == (True, False)

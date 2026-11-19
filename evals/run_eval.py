@@ -335,6 +335,7 @@ async def evaluate(args) -> None:
                 "clean": (len(documents) == 0) if unanswerable else None,
                 "latency_ms": latency_ms,
                 "top_files": [doc.get("file_name") for doc in documents],
+                "top_metadata": [doc.get("metadata") or {} for doc in documents],
                 "relevant": relevances,
                 **trace_info,
             }

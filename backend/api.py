@@ -119,17 +119,19 @@ def _chunk_config_or_422(
     parent_chunk_overlap: int | None,
     child_chunk_size: int | None,
     child_chunk_overlap: int | None,
+    strategy: str | None,
 ) -> tuple[ChunkConfig, str | None]:
     try:
-        numeric_values = (
+        explicit_values = (
             parent_chunk_size,
             parent_chunk_overlap,
             child_chunk_size,
             child_chunk_overlap,
+            strategy,
         )
         profile_name = (chunk_profile or "").strip() or None
         if profile_name:
-            if any(value is not None for value in numeric_values):
+            if any(value is not None for value in explicit_values):
                 raise ValueError("chunk_profile 不能与显式 chunk 参数同时使用")
             return named_chunk_config(profile_name), profile_name
         return (
@@ -138,6 +140,7 @@ def _chunk_config_or_422(
                 parent_chunk_overlap=parent_chunk_overlap,
                 child_chunk_size=child_chunk_size,
                 child_chunk_overlap=child_chunk_overlap,
+                strategy=strategy,
             ),
             None,
         )
@@ -164,6 +167,7 @@ async def file_upload(
     parent_chunk_overlap: int | None = Form(None),
     child_chunk_size: int | None = Form(None),
     child_chunk_overlap: int | None = Form(None),
+    strategy: str | None = Form(None),
     background_tasks: BackgroundTasks = None,
     postgresql_client=Depends(get_postgresql_client),
     milvus_client=Depends(get_milvus_client),
@@ -182,14 +186,24 @@ async def file_upload(
                 parent_chunk_overlap=parent_chunk_overlap,
                 child_chunk_size=child_chunk_size,
                 child_chunk_overlap=child_chunk_overlap,
+                strategy=strategy,
             )
             filename = Path(file.filename or "upload").name or "upload"
             logger.info(f"文件名: {filename}")
             file_lower = filename.lower()
 
             # 文件类型验证
-            if not file_lower.endswith((".pdf", ".docx", ".doc")):
-                raise HTTPException(status_code=400, detail="仅支持PDF和Word文档")
+            if not file_lower.endswith((".pdf", ".docx", ".doc", ".md")):
+                raise HTTPException(
+                    status_code=400, detail="仅支持 PDF、Word 和 Markdown 文档"
+                )
+            if chunk_config.strategy == "markdown-heading" and not file_lower.endswith(
+                ".md"
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="markdown-heading 分块策略仅支持 .md 文件",
+                )
 
             # 修复：检查文件大小，处理 file.size 为 None 的情况
             if file.size is not None and file.size > MAX_FILE_SIZE:

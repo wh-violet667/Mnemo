@@ -14,19 +14,32 @@ import config
 
 
 DEFAULT_CHUNK_PROFILE = "fine-overlap"
+DEFAULT_CHUNK_STRATEGY = "recursive"
+CHUNK_STRATEGIES = ("recursive", "markdown-heading")
 
-NAMED_CHUNK_PROFILES: dict[str, dict[str, int]] = {
+NAMED_CHUNK_PROFILES: dict[str, dict[str, Any]] = {
     DEFAULT_CHUNK_PROFILE: {
         "parent_chunk_size": 1000,
         "parent_chunk_overlap": 200,
         "child_chunk_size": 200,
         "child_chunk_overlap": 50,
+        "strategy": DEFAULT_CHUNK_STRATEGY,
     },
     "coarse-no-overlap": {
         "parent_chunk_size": 1000,
         "parent_chunk_overlap": 200,
         "child_chunk_size": 400,
         "child_chunk_overlap": 0,
+        "strategy": DEFAULT_CHUNK_STRATEGY,
+    },
+    # Structure-aware profile.  The experiment baseline uses 1000/0 + 400/0
+    # with the recursive splitter so ``strategy`` is the only changed variable.
+    "markdown-heading": {
+        "parent_chunk_size": 1000,
+        "parent_chunk_overlap": 0,
+        "child_chunk_size": 400,
+        "child_chunk_overlap": 0,
+        "strategy": "markdown-heading",
     },
 }
 
@@ -38,6 +51,7 @@ class ChunkConfig:
     child_chunk_size: int
     child_chunk_overlap: int
     separators: tuple[str, ...]
+    strategy: str = DEFAULT_CHUNK_STRATEGY
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -52,6 +66,7 @@ def default_chunk_config() -> ChunkConfig:
         child_chunk_size=int(config.child_chunk_size),
         child_chunk_overlap=int(config.child_chunk_overlap),
         separators=tuple(config.separators),
+        strategy=DEFAULT_CHUNK_STRATEGY,
     )
 
 
@@ -82,10 +97,12 @@ def validate_chunk_config(
     child_chunk_size: int | None = None,
     child_chunk_overlap: int | None = None,
     separators: tuple[str, ...] | list[str] | None = None,
+    strategy: str | None = None,
 ) -> ChunkConfig:
     """Return a validated config, filling omitted values from ``config.py``."""
 
     defaults = default_chunk_config()
+    strategy_value = str(strategy or defaults.strategy).strip()
     parent_size = int(
         defaults.parent_chunk_size if parent_chunk_size is None else parent_chunk_size
     )
@@ -116,6 +133,15 @@ def validate_chunk_config(
         raise ValueError("child_chunk_overlap 必须 >=0 且小于 child_chunk_size")
     if not separator_values:
         raise ValueError("separators 不能为空")
+    if strategy_value not in CHUNK_STRATEGIES:
+        choices = ", ".join(CHUNK_STRATEGIES)
+        raise ValueError(f"未知分块策略 {strategy_value!r}，可选值: {choices}")
+    if strategy_value == "markdown-heading" and (
+        parent_overlap or child_overlap
+    ):
+        raise ValueError(
+            "markdown-heading 以标题边界代替 overlap，parent/child overlap 必须为 0"
+        )
 
     return ChunkConfig(
         parent_chunk_size=parent_size,
@@ -123,4 +149,5 @@ def validate_chunk_config(
         child_chunk_size=child_size,
         child_chunk_overlap=child_overlap,
         separators=separator_values,
+        strategy=strategy_value,
     )

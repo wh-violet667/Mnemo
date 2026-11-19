@@ -32,6 +32,7 @@ def _chunk_config_key(value: Any) -> str:
     if not isinstance(decoded, dict):
         return ""
     core = {
+        "strategy": str(decoded.get("strategy") or "recursive"),
         "parent_chunk_size": int(decoded.get("parent_chunk_size", 0)),
         "parent_chunk_overlap": int(decoded.get("parent_chunk_overlap", 0)),
         "child_chunk_size": int(decoded.get("child_chunk_size", 0)),

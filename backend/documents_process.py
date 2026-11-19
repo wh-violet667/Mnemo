@@ -6,9 +6,11 @@ import json
 import httpx
 import asyncio
 from langchain_community.document_loaders import Docx2txtLoader, PyMuPDFLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from milvus_client import get_milvus_client
 from chunking import ChunkConfig, default_chunk_config
+from markdown_chunking import split_markdown_document, strip_front_matter
 from typing import List, Dict
 import os
 from urllib.parse import unquote
@@ -19,6 +21,23 @@ import logging
 from postgresql_client import get_postgresql_client
 
 logger = logging.getLogger(__name__)
+
+
+class MarkdownTextLoader:
+    """Minimal loader for ``.md`` files used by the recursive strategy.
+
+    Front matter is document metadata, not searchable prose, so it is removed
+    for both strategies.  The structure-aware path parses the same body with
+    heading offsets.
+    """
+
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+
+    def load(self) -> List[Document]:
+        text = self.path.read_text(encoding="utf-8", errors="replace")
+        body, _ = strip_front_matter(text)
+        return [Document(page_content=body, metadata={"source": str(self.path)})]
 
 
 class TempDocumentProcessor:
@@ -124,6 +143,50 @@ class DocumentProcessor:
             self._milvus_client = await get_milvus_client()
         return self._milvus_client
 
+    def _build_markdown_chunks(
+        self,
+        temp_file_path: Path,
+        filename: str,
+        file_hash: str,
+        knowledge_base_id: str,
+        user_id: int,
+    ) -> tuple[List[Dict], List[Document]]:
+        """Build parent/child chunks while preserving Markdown structure."""
+
+        text = Path(temp_file_path).read_text(encoding="utf-8", errors="replace")
+        markdown_parents = split_markdown_document(text, self.chunk_config)
+
+        parent_data_list: List[Dict] = []
+        all_child_items: List[Document] = []
+        for parent_index, parent in enumerate(markdown_parents):
+            parent_id = str(uuid.uuid4())
+            parent_data_list.append(
+                {
+                    "parent_id": parent_id,
+                    "knowledge_base_id": knowledge_base_id,
+                    "text": parent.text,
+                    "file_name": filename,
+                    "file_hash": file_hash,
+                }
+            )
+            for child_index, child in enumerate(parent.children):
+                child_hash = hashlib.sha256(child.text.encode()).hexdigest()
+                metadata = {
+                    "parent_id": parent_id,
+                    "parent_index": parent_index,
+                    "child_index": child_index,
+                    "file_name": filename,
+                    "child_chunk_hash": child_hash,
+                    "file_hash": file_hash,
+                    "knowledge_base_id": knowledge_base_id,
+                    "user_id": user_id,
+                    **child.metadata(),
+                }
+                all_child_items.append(
+                    Document(page_content=child.text, metadata=metadata)
+                )
+        return parent_data_list, all_child_items
+
     async def process_document(
         self,
         temp_file_path: Path,
@@ -140,6 +203,7 @@ class DocumentProcessor:
             ".pdf": PyMuPDFLoader,
             ".doc": Docx2txtLoader,
             ".docx": Docx2txtLoader,
+            ".md": MarkdownTextLoader,
         }
 
         loader_class = None
@@ -152,12 +216,25 @@ class DocumentProcessor:
         if not loader_class:
             raise ValueError(f"不支持的文件类型: {filename}")
 
+        strategy = self.chunk_config.strategy
+        if strategy == "markdown-heading" and not file_lower.endswith(".md"):
+            raise ValueError("markdown-heading 分块策略仅支持 .md 文件")
+
         loop = asyncio.get_event_loop()
         loader = loader_class(temp_file_path)
-        
+
         #父子块文档元数据增强
         def process_all_sync():
             """在一个线程中完成所有同步操作"""
+            if strategy == "markdown-heading":
+                return self._build_markdown_chunks(
+                    temp_file_path,
+                    filename,
+                    file_hash,
+                    knowledge_base_id,
+                    user_id,
+                )
+
             documents = loader.load()
             if not documents:
                 return None, None
@@ -210,7 +287,8 @@ class DocumentProcessor:
         )
 
         logger.info(
-            f"==========文本分块完成: 文件={filename}, 父块数={len(parent_data_list)}, 子块数={len(all_child_items)}=========="
+            f"==========文本分块完成: 文件={filename}, 策略={strategy}, "
+            f"父块数={len(parent_data_list)}, 子块数={len(all_child_items)}=========="
         )
 
         if not parent_data_list:

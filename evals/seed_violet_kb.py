@@ -1,10 +1,12 @@
 """把 violet-evergarden-kb 语料上传到正在运行的 Mnemo 后端。
 
-前置：后端已启动。只上传 docx/ 下 12 个文档；data/qa-benchmark.zh.jsonl
-是评测标签，按语料 README 要求绝不入库（避免评测泄漏）。
+前置：后端已启动。只上传 docx/ 或 docs/ 下 12 个评测文档；
+data/qa-benchmark.zh.jsonl 是评测标签，按语料 README 要求绝不入库
+（避免评测泄漏）。
 
 用法：
     python evals/seed_violet_kb.py --base-url http://127.0.0.1:8010
+    python evals/seed_violet_kb.py --format md --strategy markdown-heading
     python evals/seed_violet_kb.py --corpus-dir data/violet-evergarden-kb --check-only
 
 语料默认放在 `data/violet-evergarden-kb/`（不提交到 Git），也可通过
@@ -43,39 +45,59 @@ def main() -> None:
     parser.add_argument("--child-chunk-size", type=int, default=None)
     parser.add_argument("--child-chunk-overlap", type=int, default=None)
     parser.add_argument(
+        "--strategy",
+        choices=["recursive", "markdown-heading"],
+        default="recursive",
+        help="分块策略；markdown-heading 只接受 .md 语料",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["docx", "md"],
+        default="docx",
+        help="上传 docx/ 还是 docs/ 下的语料",
+    )
+    parser.add_argument(
         "--corpus-dir",
         default=None,
-        help="语料根目录（含 docx/），默认 data/violet-evergarden-kb 或 VIOLET_KB_DIR",
+        help="语料根目录（含 docx/ 或 docs/），默认 data/violet-evergarden-kb 或 VIOLET_KB_DIR",
     )
     parser.add_argument(
         "--check-only", action="store_true", help="只检查语料，不上传"
     )
     args = parser.parse_args()
 
+    if args.strategy == "markdown-heading" and args.format != "md":
+        raise SystemExit("markdown-heading 策略只能配合 --format md 使用")
+
     kb_dir = resolve_kb_dir(args.corpus_dir or os.getenv("VIOLET_KB_DIR"))
-    docx_dir = kb_dir / "docx"
-    if not docx_dir.is_dir():
-        docx_dir = kb_dir
-    if not docx_dir.is_dir():
+    suffix = ".docx" if args.format == "docx" else ".md"
+    corpus_dir = kb_dir / ("docx" if args.format == "docx" else "docs")
+    if not corpus_dir.is_dir():
+        corpus_dir = kb_dir
+    if not corpus_dir.is_dir():
         raise SystemExit(
-            f"找不到语料目录 {docx_dir}。请把 violet-evergarden-kb 放到 "
+            f"找不到语料目录 {corpus_dir}。请把 violet-evergarden-kb 放到 "
             "data/violet-evergarden-kb/，或用 --corpus-dir / VIOLET_KB_DIR 指定。"
         )
 
-    # README.docx 是语料说明，不是评测文档；避免它进入知识库成为噪声。
-    docx_files = sorted(
+    # README 是语料说明，不是评测文档；避免它进入知识库成为噪声。
+    corpus_files = sorted(
         path
-        for path in docx_dir.glob("*.docx")
-        if path.name.lower() != "readme.docx"
+        for path in corpus_dir.glob(f"*{suffix}")
+        if path.parent == corpus_dir
+        and path.name.lower() not in {"readme.docx", "readme.md"}
     )
-    if not docx_files:
-        raise SystemExit(f"{docx_dir} 为空，找不到 docx 语料")
-    if len(docx_files) != 12:
-        names = ", ".join(path.name for path in docx_files)
-        raise SystemExit(f"预期 12 份评测文档，实际 {len(docx_files)} 份：{names}")
+    if not corpus_files:
+        raise SystemExit(f"{corpus_dir} 为空，找不到 {suffix} 语料")
+    if len(corpus_files) != 12:
+        names = ", ".join(path.name for path in corpus_files)
+        raise SystemExit(f"预期 12 份评测文档，实际 {len(corpus_files)} 份：{names}")
 
     if args.check_only:
-        print(f"corpus ok: {len(docx_files)} docx in {docx_dir}")
+        print(
+            f"corpus ok: {len(corpus_files)} {suffix} in {corpus_dir} "
+            f"(strategy={args.strategy})"
+        )
         return
 
     base = args.base_url.rstrip("/")
@@ -93,12 +115,18 @@ def main() -> None:
             "parent_chunk_overlap": args.parent_chunk_overlap,
             "child_chunk_size": args.child_chunk_size,
             "child_chunk_overlap": args.child_chunk_overlap,
+            "strategy": args.strategy,
         }.items()
         if value is not None
     }
+    content_type = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if args.format == "docx"
+        else "text/markdown"
+    )
 
-    for docx in docx_files:
-        with docx.open("rb") as handle:
+    for path in corpus_files:
+        with path.open("rb") as handle:
             response = requests.post(
                 f"{base}/document_upload",
                 data={
@@ -106,22 +134,16 @@ def main() -> None:
                     "user_id": str(args.user_id),
                     **chunk_data,
                 },
-                files={
-                    "file": (
-                        docx.name,
-                        handle,
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    )
-                },
+                files={"file": (path.name, handle, content_type)},
                 timeout=120,
             )
-        print(f"upload {docx.name}: {response.status_code} {response.text[:100]}")
+        print(f"upload {path.name}: {response.status_code} {response.text[:100]}")
         if response.status_code != 200:
             raise SystemExit(
-                f"上传 {docx.name} 失败: {response.status_code} {response.text[:300]}"
+                f"上传 {path.name} 失败: {response.status_code} {response.text[:300]}"
             )
 
-    expected = len(docx_files)
+    expected = len(corpus_files)
     done = []
     for _ in range(120):
         time.sleep(2)
