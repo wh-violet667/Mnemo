@@ -328,7 +328,7 @@ Agent 的职责不是“直接回答问题”，而是决定：
 
 ### 3.7 长期记忆
 
-主要文件：`backend/auto_store_memory_from_psql.py`、`backend/memory_manager.py`、`backend/reindex_memories.py`
+主要文件：`backend/auto_store_memory_from_psql.py`、`backend/memory_manager.py`、`backend/memory_types.py`、`backend/reindex_memories.py`
 
 #### 记忆类型
 
@@ -339,19 +339,32 @@ Agent 的职责不是“直接回答问题”，而是决定：
 | episodic | 历史事件 | “上次讨论过 Milvus 过滤” |
 | procedural | 步骤/方法 | “用户习惯先写测试再改代码” |
 
+每条记忆现在带类型化字段：`confidence`、`attributes`、`event_time`、`dedupe_key`、`usage_count`、`success_count` / `failure_count`、`expires_at`。`attributes` 保存类型专属结构，例如 semantic 的 subject/predicate、episodic 的 actor/action/result、procedural 的 task/steps。
+
 #### 触发方式
 
 - 后台任务每 180 秒运行一次。
 - 只处理未摘要消息。
 - 估算 token 超过 400 才调用 LLM 提取，避免每轮对话都产生记忆。
 - 一次提取写一个 summary、若干 memory、memory_version、memory_source。
+- 每次压缩前先归档过期 summary/episodic（TTL 30/180 天）；semantic/procedural 不按时间过期。
 
 #### 冲突与版本
 
-- 新记忆先和旧记忆做向量候选召回。
-- 相似度 ≥ 0.9 时，旧记忆标记 `superseded`，新记忆 `active`，不删除旧内容。
+- 先按类型化 `dedupe_key` 做精确去重：完全相同的记忆跳过，不再重复写入。
+- 同 key 但内容变化时，旧记忆记录 `superseded_by`，新记忆保持 `active`。
+- 只有 semantic/procedural 再做向量相似度（≥0.9）的 supersede；episodic 不允许被相似事件覆盖。
 - PostgreSQL 单事务写 summary、memory、version、source、消息 `summary_id` 和用户画像。
 - 事务提交后再投影 Milvus；失败标记 `index_status=failed`，用 `reindex_memories.py` 修复。
+
+#### 检索打分
+
+四类记忆不再共用一套小时级衰减：
+
+- summary：相关性 + 7 天半衰期 recency；
+- semantic：相关性 + confidence + importance，**不做小时级 recency 衰减**；
+- episodic：相关性 + 30 天半衰期 recency + importance；
+- procedural：相关性 + 成功率 + 使用次数 + importance。
 
 #### 删除记忆
 
@@ -361,8 +374,10 @@ Agent 的职责不是“直接回答问题”，而是决定：
 
 #### 已知边界
 
-- 0.9 阈值是工程 baseline，不是语义判断；相似但不同的事实可能被误 supersede。
-- 记忆评测基本为 0：当前 50 题没有覆盖“跨会话个性化/记忆冲突/记忆删除后检索”。
+- 0.9 阈值是工程 baseline，不是语义判断；相似但不同的事实仍可能被误 supersede。
+- 精确去重依赖模型输出的 subject/predicate/task 等 attributes；缺失时退化为内容哈希。
+- 记忆评测仍为 0：当前 50 题没有覆盖“跨会话个性化/记忆冲突/记忆删除后检索”。
+- 还没有工作记忆和低价值记忆的主动遗忘；目前只做了 TTL 归档和手动删除。
 - 后台任务没有跨进程锁，多 worker 可能重复抽取。
 - 被 LLM 过滤掉的消息不会写 `summary_id`，可能每个周期重复进入提取。
 
@@ -909,9 +924,9 @@ child 检索没有拒答阈值，top-k 总会返回 chunk，所以“零召回�
 
 **Q27 (EN): How are memory conflicts handled?**
 
-新记忆与旧记忆做向量召回，相似度 ≥0.9 时旧记忆标 `superseded`，新记忆 `active`，不物理删除；版本表保留 `valid_from/valid_to/superseded_by`。0.9 是工程阈值，不是语义判断，可能误替换，后续可以接 LLM ADD/UPDATE/NOOP。
+先按类型化 `dedupe_key` 做精确去重；同 key 但内容变化时，旧记忆标 `superseded`，新记忆 `active`。只有 semantic/procedural 再做相似度 ≥0.9 的向量 supersede；episodic 不会被相似事件覆盖，避免误删历史。版本表保留 `valid_from/valid_to/superseded_by`。0.9 是工程阈值，不是语义判断，后续可以接 LLM ADD/UPDATE/NOOP。
 
-**EN:** New memories are matched against old memories by vector recall. At similarity ≥0.9, the old memory becomes `superseded`, the new one becomes `active`, and nothing is physically deleted. The version table keeps `valid_from/valid_to/superseded_by`. 0.9 is an engineering threshold, not semantic judgment, so false supersede is possible; a future version can use LLM ADD/UPDATE/NOOP decisions.
+**EN:** Memories are first deduplicated by a type-specific `dedupe_key`. If the same key has changed content, the old memory becomes `superseded` and the new one becomes `active`. Only semantic/procedural memories then use vector similarity ≥0.9 for supersede; episodic memories are never overwritten by a similar event. The version table keeps `valid_from/valid_to/superseded_by`. 0.9 is an engineering threshold, not semantic judgment; a future version can use LLM ADD/UPDATE/NOOP decisions.
 
 **Q28：删除记忆后还能被检索吗？**
 

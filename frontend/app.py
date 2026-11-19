@@ -1663,6 +1663,12 @@ def render_memory_panel() -> None:
                     if accessed_text == "未访问"
                     else f"{accessed_text} 使用 · 创建 {created_text}"
                 )
+                confidence = memory.get("confidence")
+                if isinstance(confidence, (int, float)):
+                    meta_text += f" · 置信度 {float(confidence):.2f}"
+                usage_count = memory.get("usage_count")
+                if isinstance(usage_count, int) and usage_count > 0:
+                    meta_text += f" · 使用 {usage_count} 次"
                 content = html.escape(str(memory.get("content") or ""))
                 preview = (
                     content if len(content) <= 120 else content[:120].rstrip() + "…"

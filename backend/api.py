@@ -32,6 +32,7 @@ from identifiers import (
     normalize_file_hash,
     normalize_knowledge_base_id,
 )
+import memory_types
 from chunking import (
     ChunkConfig,
     list_named_chunk_configs,
@@ -769,7 +770,7 @@ async def get_conversation_messages(
     )
 
 
-MEMORY_TYPES = {"summary", "semantic", "episodic", "procedural"}
+MEMORY_TYPES = set(memory_types.MEMORY_TYPES)
 
 
 @router.get("/memories", response_model=MemoryListResponse)

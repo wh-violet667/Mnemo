@@ -12,6 +12,7 @@ import json
 from typing import List, Dict, Any
 from datetime import datetime
 import config
+import memory_types
 from json_repair import repair_json
 from langchain_core.messages import HumanMessage
 from langchain_core.language_models import BaseChatModel
@@ -71,8 +72,12 @@ async def extract_memories(
     response = await model.ainvoke(
         [
             HumanMessage(
-                content=MEMORY_EXTRACT_PROMPT.format(
-                    conversation_text=conversation_text
+                content=(
+                    MEMORY_EXTRACT_PROMPT.format(
+                        conversation_text=conversation_text
+                    )
+                    + "\n\n"
+                    + memory_types.EXTRACTION_CONTRACT
                 )
             )
         ]
@@ -116,15 +121,30 @@ async def extract_memories(
     def parse_items(items):
         if not isinstance(items, list):
             return []
-        return [
-            {
-                "content": item["content"].strip(),
-                "importance_score": safe_score(item.get("importance_score", 0.5)),
-            }
-            for item in items
-            if isinstance(item, dict)
-            and item.get("content", "").strip()  # 确保 content 字段存在且非空字符串
-        ]
+        parsed = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            attributes = item.get("attributes")
+            parsed.append(
+                {
+                    "content": content,
+                    "importance_score": safe_score(
+                        item.get("importance_score", 0.5)
+                    ),
+                    "confidence": safe_score(item.get("confidence", 0.7)),
+                    "event_time": item.get("event_time"),
+                    "attributes": (
+                        attributes if isinstance(attributes, dict) else {}
+                    ),
+                    "success": item.get("success"),
+                    "steps": item.get("steps"),
+                }
+            )
+        return parsed
 
     summary_raw = result.get("summary", {})
 
@@ -132,6 +152,12 @@ async def extract_memories(
         "summary": {
             "content": summary_raw.get("content", "").strip(),
             "importance_score": safe_score(summary_raw.get("importance_score", 0.5)),
+            "confidence": safe_score(summary_raw.get("confidence", 0.7)),
+            "attributes": (
+                summary_raw.get("attributes")
+                if isinstance(summary_raw.get("attributes"), dict)
+                else {}
+            ),
         },
         "semantic_memory": parse_items(result.get("semantic_memory")),
         "episodic_memory": parse_items(result.get("episodic_memory")),
@@ -280,47 +306,47 @@ async def _store_memories(
     embedding_model = os.getenv("EMBEDDING_MODEL")
     embedding_dim = int(os.getenv("dense_dimension", "1024"))
 
-    # 构造稳定的 memory_id；summary 和非 summary 都带同一批 summary_id
+    # 同一批消息的时间窗，供 summary 元数据使用
+    message_times = [
+        int(message["created_at"])
+        for message in messages
+        if message.get("created_at") is not None
+    ]
+    window_start = min(message_times) if message_times else created_at
+    window_end = max(message_times) if message_times else created_at
+    default_event_time = int(messages[-1].get("created_at") or created_at)
+
+    # 构造类型化记忆；summary 和非 summary 都带同一批 summary_id
     new_memories: List[Dict[str, Any]] = []
 
     summary = extract_result.get("summary") or {}
     summary_content = (summary.get("content") or "").strip()
     if summary_content:
-        new_memories.append(
+        summary_attributes = dict(summary.get("attributes") or {})
+        summary_attributes.update(
             {
-                "memory_id": f"mem_{uuid.uuid4().hex}",
-                "user_id": user_id,
-                "memory_type": "summary",
-                "content": summary_content,
-                "importance": float(summary.get("importance_score", 0.5)),
-                "source_summary_id": summary_id,
-                "status": "active",
                 "thread_id": thread_id,
-                "conversation_id": conversation_id,
-                "embedding_model": embedding_model,
-                "embedding_dim": embedding_dim,
-                "created_at": created_at,
-                "last_access_at": created_at,
+                "window_start": window_start,
+                "window_end": window_end,
             }
         )
-
-    type_mapping = {
-        "semantic_memory": "semantic",
-        "episodic_memory": "episodic",
-        "procedural_memory": "procedural",
-    }
-    for key, memory_type in type_mapping.items():
-        for item in extract_result.get(key, []) or []:
-            content = (item.get("content") or "").strip()
-            if not content:
-                continue
+        normalized_summary = memory_types.normalize_memory_item(
+            "summary",
+            {
+                **summary,
+                "content": summary_content,
+                "attributes": summary_attributes,
+            },
+            now=created_at,
+            default_event_time=default_event_time,
+            thread_id=thread_id,
+            summary_id=summary_id,
+        )
+        if normalized_summary:
             new_memories.append(
                 {
                     "memory_id": f"mem_{uuid.uuid4().hex}",
                     "user_id": user_id,
-                    "memory_type": memory_type,
-                    "content": content,
-                    "importance": float(item.get("importance_score", 0.5)),
                     "source_summary_id": summary_id,
                     "status": "active",
                     "thread_id": thread_id,
@@ -329,6 +355,39 @@ async def _store_memories(
                     "embedding_dim": embedding_dim,
                     "created_at": created_at,
                     "last_access_at": created_at,
+                    **normalized_summary,
+                }
+            )
+
+    type_mapping = {
+        "semantic_memory": "semantic",
+        "episodic_memory": "episodic",
+        "procedural_memory": "procedural",
+    }
+    for key, memory_type in type_mapping.items():
+        for item in extract_result.get(key, []) or []:
+            normalized = memory_types.normalize_memory_item(
+                memory_type,
+                item,
+                now=created_at,
+                default_event_time=default_event_time,
+                thread_id=thread_id,
+            )
+            if not normalized:
+                continue
+            new_memories.append(
+                {
+                    "memory_id": f"mem_{uuid.uuid4().hex}",
+                    "user_id": user_id,
+                    "source_summary_id": summary_id,
+                    "status": "active",
+                    "thread_id": thread_id,
+                    "conversation_id": conversation_id,
+                    "embedding_model": embedding_model,
+                    "embedding_dim": embedding_dim,
+                    "created_at": created_at,
+                    "last_access_at": created_at,
+                    **normalized,
                 }
             )
 
@@ -341,7 +400,60 @@ async def _store_memories(
             "message_count": len(messages),
         }
 
-    # 用旧记忆做 supersede 判定；不删除旧记忆，只记录新版本关系
+    # 先按类型化 dedupe_key 做精确去重：完全相同的记忆不再重复写入；
+    # 同 key 但内容变化时，记录旧行 -> 新行的 supersede 关系。
+    exact_superseded: List[Dict[str, str]] = []
+    try:
+        existing_by_key = await pg_client.find_active_memories_by_dedupe(
+            user_id, [memory.get("dedupe_key") for memory in new_memories]
+        )
+    except Exception as e:
+        logger.error(f"记忆去重查询失败: {e}", exc_info=True)
+        return {
+            "success": False,
+            "reason": f"记忆去重查询失败: {str(e)}",
+            "filtered_message_ids": filtered_message_ids,
+            "token_count": total_tokens,
+            "message_count": len(messages),
+        }
+
+    kept_memories: List[Dict[str, Any]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for memory in new_memories:
+        dedupe_key = str(memory.get("dedupe_key") or "")
+        key = (memory["memory_type"], dedupe_key)
+        if dedupe_key and key in seen_keys:
+            # 同一批抽取里也可能重复
+            continue
+        if dedupe_key:
+            seen_keys.add(key)
+        old = existing_by_key.get(key)
+        if old:
+            if memory_types.normalize_text(old["content"]) == memory_types.normalize_text(
+                memory["content"]
+            ):
+                # 完全重复：保留旧行，本次不再插入
+                continue
+            exact_superseded.append(
+                {
+                    "memory_id": old["memory_id"],
+                    "superseded_by": memory["memory_id"],
+                }
+            )
+        kept_memories.append(memory)
+
+    new_memories = kept_memories
+    if not new_memories:
+        return {
+            "success": False,
+            "reason": "所有记忆均为精确重复",
+            "filtered_message_ids": filtered_message_ids,
+            "token_count": total_tokens,
+            "message_count": len(messages),
+        }
+
+    # 再用向量相似度处理“同义但不同措辞”的 semantic/procedural 更新；
+    # episodic 不参与 supersede，避免相似事件被误删。
     try:
         superseded_map, vectors = await milvus_client.find_superseded_candidates(
             new_memories, user_id
@@ -356,13 +468,18 @@ async def _store_memories(
             "message_count": len(messages),
         }
 
-    superseded = [
-        {
-            "memory_id": match["memory_id"],
+    superseded_by_old = {
+        item["memory_id"]: item for item in exact_superseded
+    }
+    for idx, match in superseded_map.items():
+        old_id = match["memory_id"]
+        if old_id in superseded_by_old:
+            continue
+        superseded_by_old[old_id] = {
+            "memory_id": old_id,
             "superseded_by": new_memories[idx]["memory_id"],
         }
-        for idx, match in superseded_map.items()
-    ]
+    superseded = list(superseded_by_old.values())
 
     # 使用小模型合并新旧用户画像
     if new_user_profile:
@@ -477,6 +594,23 @@ async def process_all_users_conversations(
                 "error": "数据库连接池未初始化",
                 "details": [],
             }
+
+        # Lifecycle: summary/episodic rows past TTL are archived before new
+        # extraction.  PostgreSQL is the source of truth; a failed Milvus
+        # projection is repaired by reindex_memories.py.
+        try:
+            expired_ids = await pg_client.archive_expired_memories()
+            if expired_ids:
+                milvus_client = await get_milvus_client()
+                status_ok = await milvus_client.set_memory_status(
+                    expired_ids, "archived"
+                )
+                await pg_client.mark_memories_index_status(
+                    expired_ids, "indexed" if status_ok else "failed"
+                )
+                logger.info("归档过期记忆 %s 条", len(expired_ids))
+        except Exception as exc:
+            logger.warning("归档过期记忆失败: %s", exc)
 
         results = {
             "total_conversations_processed": 0,

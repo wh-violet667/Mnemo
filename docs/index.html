@@ -654,7 +654,7 @@
 <li>用户画像缓存：减少每次 prompt 构造时的 PostgreSQL 查询。</li>
 </ul>
 <h3 id="37">3.7 长期记忆</h3>
-<p>主要文件：<code>backend/auto_store_memory_from_psql.py</code>、<code>backend/memory_manager.py</code>、<code>backend/reindex_memories.py</code></p>
+<p>主要文件：<code>backend/auto_store_memory_from_psql.py</code>、<code>backend/memory_manager.py</code>、<code>backend/memory_types.py</code>、<code>backend/reindex_memories.py</code></p>
 <h4 id="_6">记忆类型</h4>
 <div class="table-wrap"><table>
 <thead>
@@ -687,30 +687,43 @@
 </tr>
 </tbody>
 </table></div>
+<p>每条记忆现在带类型化字段：<code>confidence</code>、<code>attributes</code>、<code>event_time</code>、<code>dedupe_key</code>、<code>usage_count</code>、<code>success_count</code> / <code>failure_count</code>、<code>expires_at</code>。<code>attributes</code> 保存类型专属结构，例如 semantic 的 subject/predicate、episodic 的 actor/action/result、procedural 的 task/steps。</p>
 <h4 id="_7">触发方式</h4>
 <ul>
 <li>后台任务每 180 秒运行一次。</li>
 <li>只处理未摘要消息。</li>
 <li>估算 token 超过 400 才调用 LLM 提取，避免每轮对话都产生记忆。</li>
 <li>一次提取写一个 summary、若干 memory、memory_version、memory_source。</li>
+<li>每次压缩前先归档过期 summary/episodic（TTL 30/180 天）；semantic/procedural 不按时间过期。</li>
 </ul>
 <h4 id="_8">冲突与版本</h4>
 <ul>
-<li>新记忆先和旧记忆做向量候选召回。</li>
-<li>相似度 ≥ 0.9 时，旧记忆标记 <code>superseded</code>，新记忆 <code>active</code>，不删除旧内容。</li>
+<li>先按类型化 <code>dedupe_key</code> 做精确去重：完全相同的记忆跳过，不再重复写入。</li>
+<li>同 key 但内容变化时，旧记忆记录 <code>superseded_by</code>，新记忆保持 <code>active</code>。</li>
+<li>只有 semantic/procedural 再做向量相似度（≥0.9）的 supersede；episodic 不允许被相似事件覆盖。</li>
 <li>PostgreSQL 单事务写 summary、memory、version、source、消息 <code>summary_id</code> 和用户画像。</li>
 <li>事务提交后再投影 Milvus；失败标记 <code>index_status=failed</code>，用 <code>reindex_memories.py</code> 修复。</li>
 </ul>
-<h4 id="_9">删除记忆</h4>
+<h4 id="_9">检索打分</h4>
+<p>四类记忆不再共用一套小时级衰减：</p>
+<ul>
+<li>summary：相关性 + 7 天半衰期 recency；</li>
+<li>semantic：相关性 + confidence + importance，<strong>不做小时级 recency 衰减</strong>；</li>
+<li>episodic：相关性 + 30 天半衰期 recency + importance；</li>
+<li>procedural：相关性 + 成功率 + 使用次数 + importance。</li>
+</ul>
+<h4 id="_10">删除记忆</h4>
 <ul>
 <li>PostgreSQL 先软删除，<code>memory_versions.valid_to</code> 关闭。</li>
 <li>Milvus 更新 <code>status=deleted</code>。</li>
 <li>检索时再用 PostgreSQL 的 <code>status='active'</code> 过滤 Milvus 返回的 ID；即使 Milvus 更新失败，已删除记忆也不会被返回。</li>
 </ul>
-<h4 id="_10">已知边界</h4>
+<h4 id="_11">已知边界</h4>
 <ul>
-<li>0.9 阈值是工程 baseline，不是语义判断；相似但不同的事实可能被误 supersede。</li>
-<li>记忆评测基本为 0：当前 50 题没有覆盖“跨会话个性化/记忆冲突/记忆删除后检索”。</li>
+<li>0.9 阈值是工程 baseline，不是语义判断；相似但不同的事实仍可能被误 supersede。</li>
+<li>精确去重依赖模型输出的 subject/predicate/task 等 attributes；缺失时退化为内容哈希。</li>
+<li>记忆评测仍为 0：当前 50 题没有覆盖“跨会话个性化/记忆冲突/记忆删除后检索”。</li>
+<li>还没有工作记忆和低价值记忆的主动遗忘；目前只做了 TTL 归档和手动删除。</li>
 <li>后台任务没有跨进程锁，多 worker 可能重复抽取。</li>
 <li>被 LLM 过滤掉的消息不会写 <code>summary_id</code>，可能每个周期重复进入提取。</li>
 </ul>
@@ -734,7 +747,7 @@
 </ul>
 <h3 id="39">3.9 评测体系</h3>
 <p>主要文件：<code>evals/</code> 目录</p>
-<h4 id="_11">检索评测</h4>
+<h4 id="_12">检索评测</h4>
 <ul>
 <li><code>golden_violet.jsonl</code>：50 题，46 可回答 + 4 不可回答。</li>
 <li><code>gold_evidence</code>：每条证据带 <code>file / quote / start / end / fact</code>。</li>
@@ -745,7 +758,7 @@
 <li><code>build_gold_evidence.py</code>：从 <code>required_facts</code> + <code>reference_answer</code> + 段落重叠生成证据标签。</li>
 <li><code>evidence.py</code>：quote 覆盖率、段落匹配、文件匹配。</li>
 </ul>
-<h4 id="_12">答案评测</h4>
+<h4 id="_13">答案评测</h4>
 <ul>
 <li><code>answer_eval.py</code> 调用真实 <code>/chat_with_agent/stream</code>。</li>
 <li>Judge A：对照 <code>reference_answer</code> / <code>required_facts</code> 的 0/1/2 正确性。</li>
@@ -754,7 +767,7 @@
 <li>历史结果：56 条，完全正确率 93.5%，忠实度 97.6%，拒答准确率 100%。</li>
 <li><strong>注意</strong>：93.5% 是切换 OpenCode Go 前的 <code>qwen-plus</code> 生成 + <code>qwen-plus</code> judge 历史基线，不是当前 DeepSeek 的结果；需要重跑。</li>
 </ul>
-<h4 id="_13">分块实验</h4>
+<h4 id="_14">分块实验</h4>
 <ul>
 <li><code>chunk_experiment.py</code> 为每个配置建独立 KB、重新上传、跑 <code>run_eval</code>。</li>
 <li>DOCX 尺寸实验三组：child 200/0、200/50、400/0。</li>
@@ -764,7 +777,7 @@
 <li>生成 <code>docs/chunking-comparison.md</code> 和 <code>docs/chunking-markdown-strategy-v2.md</code>，包括指标、CI、hit/miss 翻转、基线未命中；初版硬切报告归档在 <code>docs/archive/</code>。</li>
 <li>三组核心实验的统一梳理见 <code>docs/experiments.md</code>。</li>
 </ul>
-<h4 id="_14">运行身份</h4>
+<h4 id="_15">运行身份</h4>
 <p>每次评测写 <code>_meta.json</code>：</p>
 <ul>
 <li>KB 文件 fingerprint</li>
@@ -1241,8 +1254,8 @@ chunk_experiment.py
 <p><strong>EN:</strong> A 180-second background job scans unsummarized messages. Only when the token count exceeds 400 does it call the LLM to extract summary, semantic, episodic and procedural memories plus a user profile. One PostgreSQL transaction writes facts, versions, provenance and message markers, then projects to Milvus.</p>
 <p><strong>Q27：记忆冲突怎么处理？</strong></p>
 <p><strong>Q27 (EN): How are memory conflicts handled?</strong></p>
-<p>新记忆与旧记忆做向量召回，相似度 ≥0.9 时旧记忆标 <code>superseded</code>，新记忆 <code>active</code>，不物理删除；版本表保留 <code>valid_from/valid_to/superseded_by</code>。0.9 是工程阈值，不是语义判断，可能误替换，后续可以接 LLM ADD/UPDATE/NOOP。</p>
-<p><strong>EN:</strong> New memories are matched against old memories by vector recall. At similarity ≥0.9, the old memory becomes <code>superseded</code>, the new one becomes <code>active</code>, and nothing is physically deleted. The version table keeps <code>valid_from/valid_to/superseded_by</code>. 0.9 is an engineering threshold, not semantic judgment, so false supersede is possible; a future version can use LLM ADD/UPDATE/NOOP decisions.</p>
+<p>先按类型化 <code>dedupe_key</code> 做精确去重；同 key 但内容变化时，旧记忆标 <code>superseded</code>，新记忆 <code>active</code>。只有 semantic/procedural 再做相似度 ≥0.9 的向量 supersede；episodic 不会被相似事件覆盖，避免误删历史。版本表保留 <code>valid_from/valid_to/superseded_by</code>。0.9 是工程阈值，不是语义判断，后续可以接 LLM ADD/UPDATE/NOOP。</p>
+<p><strong>EN:</strong> Memories are first deduplicated by a type-specific <code>dedupe_key</code>. If the same key has changed content, the old memory becomes <code>superseded</code> and the new one becomes <code>active</code>. Only semantic/procedural memories then use vector similarity ≥0.9 for supersede; episodic memories are never overwritten by a similar event. The version table keeps <code>valid_from/valid_to/superseded_by</code>. 0.9 is an engineering threshold, not semantic judgment; a future version can use LLM ADD/UPDATE/NOOP decisions.</p>
 <p><strong>Q28：删除记忆后还能被检索吗？</strong></p>
 <p><strong>Q28 (EN): Can a deleted memory still be retrieved?</strong></p>
 <p>正常情况下不能：PostgreSQL 软删除 + Milvus status 更新；即使 Milvus 更新失败，检索也会用 PostgreSQL active 集合过滤。极端情况下 reindex 前投影仍可能短暂不一致，所以要做回归测试。</p>
@@ -1379,7 +1392,7 @@ python evals/chunk_experiment.py --dry-run
 </code></pre>
 <hr />
 <h2 id="9">9. 未来工作</h2>
-<h3 id="_15">近期</h3>
+<h3 id="_16">近期</h3>
 <ul>
 <li>认证、租户隔离、默认本机监听、CORS 白名单。</li>
 <li>记忆 outbox / 多 worker 锁。</li>
@@ -1387,14 +1400,14 @@ python evals/chunk_experiment.py --dry-run
 <li>用当前 DeepSeek 重跑答案评测，区分生成模型和 Judge。</li>
 <li>把 400/0 放进答案评测，再决定默认配置。</li>
 </ul>
-<h3 id="_16">中期</h3>
+<h3 id="_17">中期</h3>
 <ul>
 <li>文档版本 <code>current/archived</code> 和版本冲突提示。</li>
 <li>表格/标题感知切分，减少 q002/q004 类失败。</li>
 <li>记忆 LLM 冲突裁决（ADD/UPDATE/NOOP）。</li>
 <li>Alembic + CI + 集成测试。</li>
 </ul>
-<h3 id="_17">长期</h3>
+<h3 id="_18">长期</h3>
 <ul>
 <li>多租户 SaaS。</li>
 <li>多领域语料和更大评测集。</li>

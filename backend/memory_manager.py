@@ -8,6 +8,8 @@ from pymilvus import AsyncMilvusClient, DataType, Function, FunctionType
 from pymilvus import AnnSearchRequest, RRFRanker
 import logging
 
+import memory_types
+
 logger = logging.getLogger(__name__)
 
 # 加载环境变量
@@ -103,7 +105,7 @@ class MemoryManager:
             field_name="memory_type", datatype=DataType.VARCHAR, max_length=30
         )
 
-        # 记忆状态：active / superseded / deleted
+        # 记忆状态：active / superseded / deleted / archived
         schema.add_field(
             field_name="status",
             datatype=DataType.VARCHAR,
@@ -391,9 +393,15 @@ class MemoryManager:
                 active_ids = await pg_client.get_active_memory_ids(
                     memory_ids, user_id
                 )
+                metadata = await pg_client.get_active_memory_metadata(
+                    list(active_ids), user_id
+                )
                 final_results = {
                     mem_type: [
-                        memory
+                        {
+                            **memory,
+                            **(metadata.get(str(memory.get("id"))) or {}),
+                        }
                         for memory in memories
                         if str(memory.get("id")) in active_ids
                     ]
@@ -465,53 +473,43 @@ class MemoryManager:
     def get_the_top_k_memories(
         self,
         memory_dict: Dict[str, List[Dict]],
-        alpha: float = 0.45,
-        beta: float = 0.25,
-        gamma: float = 0.3,
-        memory_configs: Dict[str, Dict] = None,
-        type_weights: Dict[str, float] = None,
+        memory_configs: Dict[str, Dict] | None = None,
     ) -> Dict[str, List[Dict]]:
-        """从记忆字典中提取每个记忆类型的前 k 条记录"""
-        if type_weights is None:
-            type_weights = {
-                "summary": 0.7,
-                "semantic": 1.3,
-                "episodic": 1.0,
-                "procedural": 1.2,
-            }
+        """Rank each memory type with its own policy.
+
+        Relevance is normalized per type because Milvus returns RRF scores
+        whose absolute scale differs from a cosine similarity.  Recency is
+        deliberately *not* applied to semantic memories: a stable preference
+        from a month ago must remain retrievable.
+        """
 
         current_time = time.time()
-        DECAY_RATE = 0.995
-
-        result = {}
+        result: Dict[str, List[Dict]] = {}
 
         for mem_type, memories in memory_dict.items():
             if not memories:
                 result[mem_type] = []
                 continue
 
-            type_weight = type_weights.get(mem_type, 1.0)
+            max_relevance = max(
+                float(mem.get("score") or 0.0) for mem in memories
+            ) or 1.0
             scored_memories = []
-
             for mem in memories:
-                semantic_score = mem.get("score", 0.5)
-
-                last_access = mem.get("last_access_at", current_time)
-                hours_passed = (current_time - last_access) / 3600
-                recency_score = DECAY_RATE**hours_passed
-
-                importance_score = mem.get("importance", 0.5)
-
-                final_score = (
-                    alpha * semantic_score
-                    + beta * recency_score
-                    + gamma * importance_score
-                ) * type_weight
-
+                relevance = max(0.0, float(mem.get("score") or 0.0)) / max_relevance
+                final_score = memory_types.score_memory(
+                    mem,
+                    relevance=relevance,
+                    now=current_time,
+                )
                 scored_memories.append((mem, final_score))
 
-            scored_memories.sort(key=lambda x: x[1], reverse=True)
-            top_k = memory_configs[mem_type]["k"]
+            scored_memories.sort(key=lambda item: item[1], reverse=True)
+            config = (memory_configs or {}).get(mem_type) or {}
+            top_k = int(
+                config.get("k")
+                or memory_types.DEFAULT_RETRIEVAL_K.get(mem_type, 2)
+            )
 
             result[mem_type] = [
                 {
@@ -520,8 +518,13 @@ class MemoryManager:
                     "content": mem.get("content"),
                     "last_access_at": mem.get("last_access_at"),
                     "summary_id": mem.get("summary_id"),
+                    "importance": mem.get("importance"),
+                    "confidence": mem.get("confidence"),
+                    "event_time": mem.get("event_time"),
+                    "usage_count": mem.get("usage_count"),
+                    "score": round(score, 4),
                 }
-                for mem, _ in scored_memories[:top_k]
+                for mem, score in scored_memories[:top_k]
             ]
 
         return result
@@ -551,6 +554,8 @@ class MemoryManager:
 
         type_to_pairs = defaultdict(list)
         for idx, (item, vector) in enumerate(zip(items, vectors)):
+            if item["memory_type"] not in memory_types.SUPERSEDE_TYPES:
+                continue
             type_to_pairs[item["memory_type"]].append((idx, vector))
 
         candidates = []

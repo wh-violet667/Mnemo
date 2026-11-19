@@ -207,8 +207,10 @@ flowchart LR
 | 情节 | 具体事件、任务、历史互动 |
 | 程序 | 可复用的方法、流程、步骤 |
 
-- 记忆写入前做相似度冲突检测（≥0.9 触发 supersede），用户画像新旧融合。
-- 检索打分：语义相似度 45% + 时近性 25% + 重要性 30%，再乘类型权重。
+- 每条记忆带 `confidence`、`attributes`、`event_time`、`dedupe_key`、`usage_count`、`success_count/failure_count`、`expires_at`。
+- 写入前先按类型化 `dedupe_key` 精确去重；只有 semantic/procedural 再做 ≥0.9 的向量 supersede，episodic 不会被相似事件覆盖。
+- 检索打分按类型分开：summary 看时近性，semantic 看 confidence + importance，episodic 看事件时间，procedural 看成功率和使用次数。
+- summary/episodic 有 TTL（30/180 天），到期归档；semantic/procedural 不按时间过期。
 
 ### 记忆数据模型
 
@@ -216,7 +218,7 @@ PostgreSQL 是记忆的事实源，Milvus 只保存可重建的检索投影：
 
 ```text
 summaries          一次压缩批次的摘要正文
-memories           当前记忆事实（active / superseded / deleted）
+memories           当前记忆事实（active / superseded / deleted / archived）
 memory_versions    记忆版本历史（valid_from / valid_to / superseded_by）
 memory_sources     记忆到原始消息的来源链
 ```
@@ -225,8 +227,8 @@ Milvus 投影仍保留 `content`，因为 BM25 稀疏向量由它生成；但 `c
 
 写入顺序：
 
-1. 新记忆先和旧记忆做向量候选召回；
-2. 相似度 ≥0.9 时，旧记忆标记 `superseded`，新记忆标记 `active`，不删除旧内容；
+1. 先按类型化 `dedupe_key` 查 PostgreSQL，完全相同的记忆跳过；
+2. 同 key 但内容变化时记录旧行 → 新行的 supersede；semantic/procedural 再做向量相似度补充；
 3. 在同一个 PostgreSQL 事务里写 summary、memory、version、source、消息 `summary_id` 和用户画像；
 4. 事务提交后，再把新记忆和旧记忆状态投影到 Milvus；失败时标记 `index_status=failed`，用 reindex 修复。
 
@@ -476,7 +478,7 @@ python evals/answer_eval.py --no-judge --limit 10
 python -m pytest -q
 ```
 
-当前 112 个测试（含参数化），覆盖：
+当前 120 个测试（含参数化），覆盖：
 
 - 引用编号、来源格式化、rerank 结果映射
 - Recall@k / MRR / Precision@k / nDCG / 分位数
@@ -507,6 +509,7 @@ Mnemo/
 │   ├── routing.py               # 复杂度规则、查询生成、停止条件
 │   ├── memory_manager.py        # 记忆检索、supersede 判定、Milvus 投影
 │   ├── auto_store_memory_from_psql.py  # 180s 记忆压缩任务
+│   ├── memory_types.py          # 四类记忆合同、去重键、类型化打分
 │   ├── migrate_memory_v2.py     # 旧 memory_collection 迁移脚本
 │   ├── reindex_memories.py      # 从 PostgreSQL 重建 Milvus 记忆投影
 │   ├── documents_process.py     # PDF/Word/Markdown 解析、分块、rerank
@@ -555,7 +558,7 @@ Mnemo/
 │   ├── judges.py                # Judge A/B 提示词与解析
 │   ├── run_identity.py          # KB 指纹 + 运行身份（meta.json）
 │   └── README.md
-├── tests/                       # pytest（112 个测试）
+├── tests/                       # pytest（120 个测试）
 ├── scripts/                     # 网页生成、Agentic 冒烟
 │   ├── build_docs_site.py       # 从 Markdown 生成 GitHub Pages
 │   ├── smoke_agentic.py         # 真实模型 planner/critic 冒烟
@@ -577,14 +580,16 @@ Mnemo/
 - **rerank 有延迟成本**：`qwen3.7-text-rerank` 会增加一次远程重排调用，适合对排序质量敏感的场景。
 - **依赖外部服务**：OpenCode Go、DashScope 和 Zilliz 都是云服务，离线环境需要替换为本地模型/本地 Milvus。
 - **索引是最终一致**：PostgreSQL 事务提交后若 Milvus 投影失败，需要运行 `reindex_memories.py`；尚未实现自动 outbox worker。
-- **冲突策略仍是阈值式**：≥0.9 会把旧记忆标记为 superseded，尚未接入 LLM 判断 ADD / UPDATE / NOOP；相似但不同的事实可能被误替换。
+- **冲突策略仍是阈值式**：精确去重后，只有 semantic/procedural 会用 ≥0.9 的向量相似度触发 supersede；episodic 不参与，避免相似事件被误删。尚未接入 LLM 判断 ADD / UPDATE / NOOP。
+- **记忆评测仍为 0**：当前 50/56 题没有覆盖跨会话个性化、记忆冲突和删除后检索；这一轮只改了类型合同、存储和检索，没有跑记忆效果评测。
+- **还没有工作记忆和主动遗忘**：目前只有 summary/episodic 的 TTL 归档、手动软删除和 supersede；低价值记忆淘汰、工作记忆 TTL 尚未实现。
 
 ## Roadmap
 
 - [ ] 登录与用户隔离，去掉写死的 `MNEMO_USER_ID`
 - [x] 记忆抽屉：查看、刷新、删除四类记忆
 - [x] 记忆事实源、版本历史、来源链与 supersede
-- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 112 个测试
+- [x] Agentic-lite：fast / auto / deep + trace；答案评测 + 120 个测试
 - [x] 默认检索模式改为 `fast`，需要多轮时显式选择
 - [x] 答案评测：FactualCorrectness / Faithfulness / Citation / Refusal（violet 50 + 6 拒答）
 - [ ] 人工抽检 12–15 条并复核 Judge A/B

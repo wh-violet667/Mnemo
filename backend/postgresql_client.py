@@ -332,6 +332,14 @@ class PostgreSQLParentClient:
                             memory_type VARCHAR(30) NOT NULL,
                             content TEXT NOT NULL,
                             importance REAL DEFAULT 0.5,
+                            confidence REAL DEFAULT 0.5,
+                            attributes JSONB DEFAULT '{}'::jsonb,
+                            event_time BIGINT DEFAULT 0,
+                            dedupe_key VARCHAR(128),
+                            usage_count INTEGER NOT NULL DEFAULT 0,
+                            success_count INTEGER NOT NULL DEFAULT 0,
+                            failure_count INTEGER NOT NULL DEFAULT 0,
+                            expires_at BIGINT DEFAULT 0,
                             status VARCHAR(20) NOT NULL DEFAULT 'active',
                             superseded_by VARCHAR(64),
                             source_summary_id VARCHAR(64) REFERENCES summaries(summary_id) ON DELETE SET NULL,
@@ -346,12 +354,35 @@ class PostgreSQLParentClient:
                             deleted_at TIMESTAMP,
                             last_access_at BIGINT DEFAULT 0
                         );
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS confidence REAL DEFAULT 0.5;
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS attributes JSONB DEFAULT '{}'::jsonb;
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS event_time BIGINT DEFAULT 0;
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(128);
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS usage_count INTEGER NOT NULL DEFAULT 0;
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS success_count INTEGER NOT NULL DEFAULT 0;
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0;
+                        ALTER TABLE memories
+                            ADD COLUMN IF NOT EXISTS expires_at BIGINT DEFAULT 0;
                         CREATE INDEX IF NOT EXISTS idx_memories_user_status_type
                             ON memories(user_id, status, memory_type);
                         CREATE INDEX IF NOT EXISTS idx_memories_summary
                             ON memories(source_summary_id);
                         CREATE INDEX IF NOT EXISTS idx_memories_index_status
                             ON memories(index_status);
+                        CREATE INDEX IF NOT EXISTS idx_memories_type_event
+                            ON memories(user_id, memory_type, event_time DESC);
+                        CREATE INDEX IF NOT EXISTS idx_memories_type_access
+                            ON memories(user_id, memory_type, last_access_at DESC);
+                        CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_active_dedupe
+                            ON memories(user_id, memory_type, dedupe_key)
+                            WHERE status = 'active' AND dedupe_key IS NOT NULL;
 
                         -- 10. 记忆版本表（只追加，不覆盖）
                         CREATE TABLE IF NOT EXISTS memory_versions (
@@ -1995,19 +2026,28 @@ class PostgreSQLParentClient:
                         memory_id = mem["memory_id"]
                         content = mem["content"]
                         importance = float(mem.get("importance", 0.5))
+                        attributes_json = json.dumps(
+                            mem.get("attributes") or {},
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
                         await conn.execute(
                             """
                             INSERT INTO memories (
                                 memory_id, user_id, memory_type, content, importance,
+                                confidence, attributes, event_time, dedupe_key,
+                                usage_count, success_count, failure_count, expires_at,
                                 status, source_summary_id, thread_id, conversation_id,
                                 embedding_model, embedding_dim, index_status,
                                 created_at, last_access_at
                             )
                             VALUES (
                                 $1, $2, $3, $4, $5,
-                                'active', $6, $7, $8,
-                                $9, $10, 'pending',
-                                $11, $12
+                                $6, $7::jsonb, $8, $9,
+                                $10, $11, $12, $13,
+                                'active', $14, $15, $16,
+                                $17, $18, 'pending',
+                                $19, $20
                             )
                             """,
                             memory_id,
@@ -2015,6 +2055,14 @@ class PostgreSQLParentClient:
                             mem["memory_type"],
                             content,
                             importance,
+                            float(mem.get("confidence", 0.5)),
+                            attributes_json,
+                            int(mem.get("event_time") or 0),
+                            mem.get("dedupe_key"),
+                            int(mem.get("usage_count") or 0),
+                            int(mem.get("success_count") or 0),
+                            int(mem.get("failure_count") or 0),
+                            int(mem.get("expires_at") or 0),
                             mem.get("source_summary_id") or summary_id,
                             thread_id,
                             conversation_id,
@@ -2112,6 +2160,8 @@ class PostgreSQLParentClient:
         params: List[Any] = [user_id]
         sql = """
             SELECT memory_id AS id, memory_type, content, importance,
+                   confidence, attributes, event_time, dedupe_key,
+                   usage_count, success_count, failure_count, expires_at,
                    source_summary_id AS summary_id, created_at, last_access_at
             FROM memories
             WHERE user_id = $1 AND status = 'active'
@@ -2131,6 +2181,14 @@ class PostgreSQLParentClient:
                 "memory_type": row["memory_type"],
                 "content": row["content"] or "",
                 "importance": row["importance"],
+                "confidence": row["confidence"],
+                "attributes": _decode_jsonb(row["attributes"]) or {},
+                "event_time": row["event_time"],
+                "dedupe_key": row["dedupe_key"],
+                "usage_count": row["usage_count"],
+                "success_count": row["success_count"],
+                "failure_count": row["failure_count"],
+                "expires_at": row["expires_at"],
                 "summary_id": row["summary_id"],
                 "created_at": row["created_at"],
                 "last_access_at": row["last_access_at"],
@@ -2191,6 +2249,122 @@ class PostgreSQLParentClient:
                 normalized,
             )
         return {str(row["memory_id"]) for row in rows}
+
+    async def get_active_memory_metadata(
+        self, memory_ids: List[str], user_id: int
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return lifecycle metadata for active memories.
+
+        Milvus only needs the vector and text for candidate generation; the
+        authoritative confidence/event/usage fields stay in PostgreSQL so a
+        schema change does not require rebuilding the whole memory collection.
+        """
+
+        if not self.pool or not memory_ids:
+            return {}
+
+        normalized = [str(memory_id) for memory_id in memory_ids if memory_id]
+        if not normalized:
+            return {}
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT memory_id, memory_type, importance, confidence,
+                       attributes, event_time, dedupe_key, usage_count,
+                       success_count, failure_count, expires_at,
+                       created_at, last_access_at
+                FROM memories
+                WHERE user_id = $1
+                  AND status = 'active'
+                  AND memory_id = ANY($2::text[])
+                """,
+                user_id,
+                normalized,
+            )
+
+        return {
+            str(row["memory_id"]): {
+                "memory_type": row["memory_type"],
+                "importance": row["importance"],
+                "confidence": row["confidence"],
+                "attributes": _decode_jsonb(row["attributes"]) or {},
+                "event_time": row["event_time"],
+                "dedupe_key": row["dedupe_key"],
+                "usage_count": row["usage_count"],
+                "success_count": row["success_count"],
+                "failure_count": row["failure_count"],
+                "expires_at": row["expires_at"],
+                "created_at": row["created_at"],
+                "last_access_at": row["last_access_at"],
+            }
+            for row in rows
+        }
+
+    async def find_active_memories_by_dedupe(
+        self, user_id: int, dedupe_keys: List[str]
+    ) -> Dict[tuple[str, str], Dict[str, Any]]:
+        """Find active rows with the same exact type-specific dedupe key."""
+
+        if not self.pool or not dedupe_keys:
+            return {}
+
+        keys = list(dict.fromkeys(key for key in dedupe_keys if key))
+        if not keys:
+            return {}
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT memory_id, memory_type, dedupe_key, content,
+                       importance, confidence
+                FROM memories
+                WHERE user_id = $1
+                  AND status = 'active'
+                  AND dedupe_key = ANY($2::text[])
+                """,
+                user_id,
+                keys,
+            )
+
+        return {
+            (str(row["memory_type"]), str(row["dedupe_key"])): {
+                "memory_id": str(row["memory_id"]),
+                "memory_type": str(row["memory_type"]),
+                "dedupe_key": str(row["dedupe_key"]),
+                "content": row["content"] or "",
+                "importance": row["importance"],
+                "confidence": row["confidence"],
+            }
+            for row in rows
+        }
+
+    async def archive_expired_memories(self, now: int | None = None) -> List[str]:
+        """Archive summary/episodic rows past their TTL.
+
+        PostgreSQL is updated first; the caller updates the Milvus projection.
+        A failed projection is recoverable with ``reindex_memories.py``.
+        """
+
+        if not self.pool:
+            return []
+
+        timestamp = int(now or time.time())
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE memories
+                SET status = 'archived',
+                    index_status = 'pending',
+                    updated_at = NOW()
+                WHERE status = 'active'
+                  AND expires_at > 0
+                  AND expires_at < $1
+                RETURNING memory_id
+                """,
+                timestamp,
+            )
+        return [str(row["memory_id"]) for row in rows]
 
     async def soft_delete_memory(self, memory_id: str, user_id: int) -> int:
         """软删除：保留事实与版本，Milvus 状态由调用方同步。"""

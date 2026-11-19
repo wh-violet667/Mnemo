@@ -98,6 +98,14 @@ class MemoryItem(BaseModel):
     memory_type: str
     content: str
     importance: Optional[float] = None
+    confidence: Optional[float] = None
+    attributes: Optional[Dict[str, Any]] = None
+    event_time: Optional[int] = None
+    dedupe_key: Optional[str] = None
+    usage_count: Optional[int] = None
+    success_count: Optional[int] = None
+    failure_count: Optional[int] = None
+    expires_at: Optional[int] = None
     summary_id: Optional[str] = None
     created_at: Optional[int] = None
     last_access_at: Optional[int] = None
