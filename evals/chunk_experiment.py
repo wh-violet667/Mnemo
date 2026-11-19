@@ -251,6 +251,7 @@ def build_report(
     corpus_format: str = "docx",
     index_counts: Dict[str, tuple[int, int]] | None = None,
     structure_stats: Dict[str, Dict[str, float]] | None = None,
+    parent_results: Dict[str, Dict[str, Any]] | None = None,
 ) -> str:
     baseline_name = configs[0]["name"]
     baseline = results[baseline_name]
@@ -287,9 +288,9 @@ def build_report(
                 "当前 `coarse-no-overlap` profile 的父块 overlap，用于回答“结构感知"
                 "是否能超过用户今天能选的策略”。",
                 "",
-                "`markdown-heading` 的每个 chunk 会前置自己的 heading path（例如"
-                " `# 作品概况 > 基本信息`），用于保留章节上下文；这不调用额外模型，"
-                "属于策略本身的一部分。",
+                "`markdown-heading` 会把同一一级标题下的相邻短章节打包到同一父/子块，"
+                "标题行保留在正文中；每个 chunk 仍带 heading path（多个章节时写"
+                " `heading_paths`）。这不调用额外模型，属于策略本身的一部分。",
             ]
         )
 
@@ -311,6 +312,60 @@ def build_report(
             f"{_fmt(summary.get(f'precision@{k}'))} | {_fmt(summary.get(f'ndcg@{k}'))} | "
             f"{summary.get('p50_ms', 0):.0f} / {summary.get('p95_ms', 0):.0f} ms |"
         )
+
+    if parent_results:
+        lines.extend(
+            [
+                "",
+                "## 生产路径（parent 级回表）",
+                "",
+                "child 级只用于隔离 chunk 边界；parent 级才走生产路径："
+                "`hybrid_retrieval_knowledge_base` → PostgreSQL 回表 → rerank。",
+                "",
+                "| 策略 | n | Recall@k | MRR | Precision@k | nDCG@k | P50 / P95 |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for config in configs:
+            name = config["name"]
+            result = parent_results.get(name)
+            if not result:
+                continue
+            summary = result.get("summary") or {}
+            lines.append(
+                f"| `{name}` | {len(result.get('results', []))} | "
+                f"{_fmt(summary.get(f'recall@{k}'))} | {_fmt(summary.get('mrr'))} | "
+                f"{_fmt(summary.get(f'precision@{k}'))} | "
+                f"{_fmt(summary.get(f'ndcg@{k}'))} | "
+                f"{summary.get('p50_ms', 0):.0f} / {summary.get('p95_ms', 0):.0f} ms |"
+            )
+
+        parent_baseline = parent_results.get(baseline_name)
+        if parent_baseline:
+            lines.extend(
+                [
+                    "",
+                    "相对 parent 基线（配对 bootstrap 95% CI）：",
+                    "",
+                    "| 策略 | ΔRecall | ΔMRR | ΔPrecision | ΔnDCG |",
+                    "|---|---:|---:|---:|---:|",
+                ]
+            )
+            for config in configs[1:]:
+                name = config["name"]
+                result = parent_results.get(name)
+                if not result:
+                    continue
+                cells = []
+                for metric, _ in METRICS:
+                    base_values, new_values = paired_metric_values(
+                        parent_baseline, result, metric
+                    )
+                    delta, low, high = paired_bootstrap_ci(
+                        base_values, new_values, n_resamples=bootstrap
+                    )
+                    cells.append(_fmt_delta(delta, low, high))
+                lines.append(f"| `{name}` | " + " | ".join(cells) + " |")
 
     if index_counts:
         lines.extend(
@@ -496,11 +551,11 @@ def build_report(
                 "",
                 "- 结构切分确实生效：表格子块的表头保留率和列数一致率明显高于"
                 "递归策略（见上表）。",
-                "- 但 Recall@5 没有提升；MRR/nDCG 的正向变化 95% CI 跨 0，"
-                "Precision 的下降 CI 不跨 0；主要代价是子块更小、更多，P95 延迟更高。",
+                "- 但 Recall@5 没有提升；MRR/nDCG 的正向变化 95% CI 跨 0；"
+                "Precision 的下降幅度见表，需结合 CI 判断是否显著。",
                 "- 因此**不替换默认 `fine-overlap`**。`markdown-heading` 适合章节/表格"
-                "结构本身就是检索信号的 Markdown 知识库；下一步应增加“短章节合并”"
-                "或按文档调 child size，再验证 Precision 和延迟。",
+                "结构本身就是检索信号的 Markdown 知识库；下一步应做答案级评测和更大"
+                "语料复核，再决定是否调整默认策略。",
                 "",
                 "> 单次 50 题评测仍有抽样波动；本报告的 95% CI 是配对 bootstrap，"
                 "解释时应同时看区间和效应量。",
@@ -679,6 +734,11 @@ def main() -> None:
     parser.add_argument("--bootstrap", type=int, default=2000)
     parser.add_argument("--skip-seed", action="store_true")
     parser.add_argument(
+        "--parent-eval",
+        action="store_true",
+        help="额外跑 parent 级（生产回表路径）评测，写入 <config>.parent.json",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="复用 results-dir 中已存在的 <config>.json，只跑缺失配置",
@@ -734,86 +794,130 @@ def main() -> None:
     for item in plan:
         kb_id = item["kb_id"]
         output_path = results_dir / f"{item['name']}.json"
-        if args.resume and output_path.exists():
-            print(f"\nskip existing result: {output_path}")
-            continue
-        if not args.skip_seed:
-            # Start from a clean namespace so duplicate hashes from an earlier
-            # run cannot silently keep the old chunking.
-            import requests
+        variant_golden = results_dir / f"{item['name']}.golden.jsonl"
+        materialize_golden(Path(args.golden), variant_golden, kb_id)
 
-            response = requests.delete(
-                f"{args.base_url.rstrip('/')}/knowledge-bases/{kb_id}",
-                params={"user_id": args.user_id},
-                timeout=30,
-            )
-            if response.status_code not in (200, 404):
-                raise SystemExit(
-                    f"清理 {kb_id} 失败: {response.status_code} {response.text[:200]}"
+        child_exists = args.resume and output_path.exists()
+        if child_exists:
+            print(f"\nskip existing result: {output_path}")
+        else:
+            if not args.skip_seed:
+                # Start from a clean namespace so duplicate hashes from an
+                # earlier run cannot silently keep the old chunking.
+                import requests
+
+                response = requests.delete(
+                    f"{args.base_url.rstrip('/')}/knowledge-bases/{kb_id}",
+                    params={"user_id": args.user_id},
+                    timeout=30,
                 )
-            seed_command = [
+                if response.status_code not in (200, 404):
+                    raise SystemExit(
+                        f"清理 {kb_id} 失败: {response.status_code} {response.text[:200]}"
+                    )
+                seed_command = [
+                    sys.executable,
+                    str(ROOT / "evals" / "seed_violet_kb.py"),
+                    "--base-url",
+                    args.base_url,
+                    "--kb-id",
+                    kb_id,
+                    "--user-id",
+                    str(args.user_id),
+                    "--corpus-dir",
+                    str(Path(args.corpus_dir)),
+                    "--format",
+                    corpus_format,
+                    "--strategy",
+                    str(item.get("strategy", "recursive")),
+                    "--parent-chunk-size",
+                    str(item["parent_chunk_size"]),
+                    "--parent-chunk-overlap",
+                    str(item["parent_chunk_overlap"]),
+                    "--child-chunk-size",
+                    str(item["child_chunk_size"]),
+                    "--child-chunk-overlap",
+                    str(item["child_chunk_overlap"]),
+                ]
+                run_command(seed_command)
+
+            meta_path = results_dir / f"{item['name']}_meta.json"
+            eval_command = [
                 sys.executable,
-                str(ROOT / "evals" / "seed_violet_kb.py"),
-                "--base-url",
-                args.base_url,
+                str(ROOT / "evals" / "run_eval.py"),
                 "--kb-id",
                 kb_id,
                 "--user-id",
                 str(args.user_id),
-                "--corpus-dir",
-                str(Path(args.corpus_dir)),
-                "--format",
-                corpus_format,
-                "--strategy",
-                str(item.get("strategy", "recursive")),
-                "--parent-chunk-size",
-                str(item["parent_chunk_size"]),
-                "--parent-chunk-overlap",
-                str(item["parent_chunk_overlap"]),
-                "--child-chunk-size",
-                str(item["child_chunk_size"]),
-                "--child-chunk-overlap",
-                str(item["child_chunk_overlap"]),
+                "--golden",
+                str(variant_golden),
+                "--k",
+                str(args.k),
+                "--retrieval-mode",
+                "baseline",
+                "--mode",
+                args.mode,
+                "--granularity",
+                str(item.get("granularity", "child")),
+                "--chunk-config",
+                json.dumps(item, ensure_ascii=False),
+                "--output",
+                str(output_path),
+                "--meta-output",
+                str(meta_path),
+                "--run-id",
+                f"{run_id}-{item['name']}",
             ]
-            run_command(seed_command)
+            if args.limit:
+                eval_command.extend(["--limit", str(args.limit)])
+            run_command(eval_command)
 
-        meta_path = results_dir / f"{item['name']}_meta.json"
-        variant_golden = results_dir / f"{item['name']}.golden.jsonl"
-        materialize_golden(Path(args.golden), variant_golden, kb_id)
-        eval_command = [
-            sys.executable,
-            str(ROOT / "evals" / "run_eval.py"),
-            "--kb-id",
-            kb_id,
-            "--user-id",
-            str(args.user_id),
-            "--golden",
-            str(variant_golden),
-            "--k",
-            str(args.k),
-            "--retrieval-mode",
-            "baseline",
-            "--mode",
-            args.mode,
-            "--granularity",
-            str(item.get("granularity", "child")),
-            "--chunk-config",
-            json.dumps(item, ensure_ascii=False),
-            "--output",
-            str(output_path),
-            "--meta-output",
-            str(meta_path),
-            "--run-id",
-            f"{run_id}-{item['name']}",
-        ]
-        if args.limit:
-            eval_command.extend(["--limit", str(args.limit)])
-        run_command(eval_command)
+        if args.parent_eval:
+            parent_output_path = results_dir / f"{item['name']}.parent.json"
+            parent_meta_path = results_dir / f"{item['name']}_parent_meta.json"
+            if args.resume and parent_output_path.exists():
+                print(f"skip existing parent result: {parent_output_path}")
+            else:
+                parent_command = [
+                    sys.executable,
+                    str(ROOT / "evals" / "run_eval.py"),
+                    "--kb-id",
+                    kb_id,
+                    "--user-id",
+                    str(args.user_id),
+                    "--golden",
+                    str(variant_golden),
+                    "--k",
+                    str(args.k),
+                    "--retrieval-mode",
+                    "baseline",
+                    "--mode",
+                    args.mode,
+                    "--granularity",
+                    "parent",
+                    "--chunk-config",
+                    json.dumps(item, ensure_ascii=False),
+                    "--output",
+                    str(parent_output_path),
+                    "--meta-output",
+                    str(parent_meta_path),
+                    "--run-id",
+                    f"{run_id}-{item['name']}-parent",
+                ]
+                if args.limit:
+                    parent_command.extend(["--limit", str(args.limit)])
+                run_command(parent_command)
 
     results = {}
     for item in plan:
         path = results_dir / f"{item['name']}.json"
         results[item["name"]] = json.loads(path.read_text(encoding="utf-8"))
+
+    parent_results: Dict[str, Dict[str, Any]] = {}
+    for item in plan:
+        path = results_dir / f"{item['name']}.parent.json"
+        if path.exists():
+            parent_results[item["name"]] = json.loads(path.read_text(encoding="utf-8"))
 
     golden = load_golden(Path(args.golden))
     index_counts = load_index_counts(plan, args.user_id)
@@ -831,6 +935,7 @@ def main() -> None:
         corpus_format=corpus_format,
         index_counts=index_counts,
         structure_stats=structure_stats,
+        parent_results=parent_results,
     )
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(markdown, encoding="utf-8")

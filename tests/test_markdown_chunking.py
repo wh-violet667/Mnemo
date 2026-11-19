@@ -27,7 +27,7 @@ def test_strip_front_matter_keeps_source_offset():
     assert text[offset:].startswith("\n# Doc")
 
 
-def test_heading_path_is_attached_to_every_chunk():
+def test_short_sections_are_merged_but_keep_heading_paths():
     text = (
         "---\ntitle: demo\n---\n\n"
         "# 作品\n\n"
@@ -38,14 +38,31 @@ def test_heading_path_is_attached_to_every_chunk():
     )
     parents = split_markdown_document(text, _markdown_config())
 
-    assert [parent.heading_path for parent in parents] == [
-        ("作品", "基本信息"),
-        ("作品", "角色"),
-    ]
-    assert "# 作品 > 基本信息" in parents[0].text
-    assert "这是角色介绍" not in parents[0].text
+    assert len(parents) == 1
+    assert parents[0].heading_path == ("作品", "基本信息")
+    assert "## 作品 > 基本信息" in parents[0].text
+    assert "## 作品 > 角色" in parents[0].text
+    assert "这是基本信息" in parents[0].text
+    assert "这是角色介绍" in parents[0].text
     assert parents[0].start < parents[0].end
-    assert parents[1].start < parents[1].end
+
+    child = parents[0].children[0]
+    assert child.heading_paths == ("作品 > 基本信息", "作品 > 角色")
+    assert child.metadata()["heading_paths"] == ["作品 > 基本信息", "作品 > 角色"]
+
+
+def test_sections_under_different_h1_are_not_merged():
+    text = (
+        "# 第一部\n\n## 甲\n\n甲的内容。\n\n"
+        "# 第二部\n\n## 乙\n\n乙的内容。\n"
+    )
+    parents = split_markdown_document(text, _markdown_config())
+
+    assert [parent.heading_path for parent in parents] == [
+        ("第一部", "甲"),
+        ("第二部", "乙"),
+    ]
+    assert "乙的内容" not in parents[0].text
 
 
 def test_tables_keep_header_when_split_across_children():

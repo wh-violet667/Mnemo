@@ -29,6 +29,11 @@ _TABLE_SEPARATOR_RE = re.compile(r"^[\s|:-]+$")
 _LIST_RE = re.compile(r"^([-*+]\s+|\d+[.)]\s+)")
 _SENTENCE_BOUNDARY_RE = re.compile(r"[。！？!?；;]+|\n+")
 
+# Reserve room for a synthetic ``# heading > path`` prefix when a chunk starts
+# in the middle of a section.  Chunks that start with a heading line do not
+# need it, but a fixed reserve keeps packing simple and the size bound safe.
+_HEADING_PREFIX_RESERVE = 80
+
 
 @dataclass(frozen=True)
 class MarkdownChunk:
@@ -39,10 +44,15 @@ class MarkdownChunk:
     start: int
     end: int
     block_type: str
+    heading_paths: tuple[str, ...] = ()
 
     def metadata(self) -> dict[str, Any]:
+        paths = self.heading_paths
+        if not paths and self.heading_path:
+            paths = (" > ".join(self.heading_path),)
         return {
             "heading_path": " > ".join(self.heading_path),
+            "heading_paths": list(paths),
             "start": self.start,
             "end": self.end,
             "block_type": self.block_type,
@@ -76,6 +86,20 @@ class _Piece:
     start: int
     end: int
     block_type: str
+
+
+@dataclass(frozen=True)
+class _Section:
+    heading: _Block | None
+    blocks: tuple[_Block, ...]
+
+    @property
+    def heading_path(self) -> tuple[str, ...]:
+        if self.heading is not None:
+            return self.heading.heading_path
+        if self.blocks:
+            return self.blocks[0].heading_path
+        return ()
 
 
 def strip_front_matter(text: str) -> tuple[str, int]:
@@ -223,51 +247,67 @@ def split_markdown_document(
     text: str,
     config: ChunkConfig,
 ) -> list[MarkdownParent]:
-    """Build structure-aware parent/child chunks from one Markdown document."""
+    """Build structure-aware parent/child chunks from one Markdown document.
+
+    Adjacent sections that share a first-level heading are packed together up
+    to the configured size.  This avoids the failure mode where a corpus with
+    many short ``##`` sections produces hundreds of 100–200 character chunks:
+    heading lines stay in the text, but short siblings share one parent/child.
+    """
 
     body, base_offset = strip_front_matter(text)
     blocks = [
-        block
-        for block in parse_markdown_blocks(body, base_offset)
-        if block.block_type != "heading" and block.text.strip()
+        block for block in parse_markdown_blocks(body, base_offset) if block.text.strip()
     ]
+    sections = [section for section in _build_sections(blocks) if section.blocks]
+    if not sections:
+        return []
 
-    # Keep consecutive blocks that belong to the same heading together.  A
-    # heading change is a hard chunk boundary, which is the point of this
-    # strategy.
-    sections: list[list[_Block]] = []
-    for block in blocks:
-        if not sections or sections[-1][0].heading_path != block.heading_path:
-            sections.append([block])
-        else:
-            sections[-1].append(block)
+    parent_budget = max(
+        50, config.parent_chunk_size - _HEADING_PREFIX_RESERVE
+    )
+    child_budget = max(50, config.child_chunk_size - _HEADING_PREFIX_RESERVE)
 
     parents: list[MarkdownParent] = []
-    for section in sections:
-        heading_path = section[0].heading_path
-        prefix = _heading_prefix(heading_path)
-        parent_budget = max(50, config.parent_chunk_size - len(prefix))
-        child_budget = max(50, config.child_chunk_size - len(prefix))
-
+    for section_group in _group_sections(sections):
         parent_pieces: list[_Piece] = []
-        for block in section:
-            parent_pieces.extend(_split_block(block, parent_budget))
+        for section in section_group:
+            if section.heading is not None:
+                parent_pieces.append(_heading_piece(section.heading))
+            for block in section.blocks:
+                parent_pieces.extend(_split_block(block, parent_budget))
 
         for parent_group in _pack_pieces(parent_pieces, parent_budget):
-            parent_text = prefix + "\n\n".join(piece.text for piece in parent_group)
+            if not _has_body(parent_group):
+                continue
+            parent_text = _chunk_text(parent_group)
+            if not parent_text.strip():
+                continue
 
             child_pieces: list[_Piece] = []
             for piece in parent_group:
-                child_pieces.extend(_split_block(_as_block(piece), child_budget))
+                if piece.block_type == "heading":
+                    child_pieces.append(piece)
+                else:
+                    child_pieces.extend(
+                        _split_block(_as_block(piece), child_budget)
+                    )
+
             children: list[MarkdownChunk] = []
             for child_group in _pack_pieces(child_pieces, child_budget):
+                if not _has_body(child_group):
+                    continue
+                child_text = _chunk_text(child_group)
+                if not child_text.strip():
+                    continue
                 children.append(
                     MarkdownChunk(
-                        text=prefix + "\n\n".join(piece.text for piece in child_group),
-                        heading_path=heading_path,
+                        text=child_text,
+                        heading_path=child_group[0].heading_path,
                         start=child_group[0].start,
                         end=child_group[-1].end,
                         block_type=_combined_type(child_group),
+                        heading_paths=_distinct_paths(child_group),
                     )
                 )
 
@@ -276,7 +316,7 @@ def split_markdown_document(
             parents.append(
                 MarkdownParent(
                     text=parent_text,
-                    heading_path=heading_path,
+                    heading_path=parent_group[0].heading_path,
                     start=parent_group[0].start,
                     end=parent_group[-1].end,
                     children=tuple(children),
@@ -284,6 +324,81 @@ def split_markdown_document(
             )
 
     return parents
+
+
+def _build_sections(blocks: Sequence[_Block]) -> list[_Section]:
+    sections: list[_Section] = []
+    heading: _Block | None = None
+    body: list[_Block] = []
+
+    for block in blocks:
+        if block.block_type == "heading":
+            if heading is not None or body:
+                sections.append(_Section(heading=heading, blocks=tuple(body)))
+            heading = block
+            body = []
+            continue
+        body.append(block)
+
+    if heading is not None or body:
+        sections.append(_Section(heading=heading, blocks=tuple(body)))
+    return sections
+
+
+def _group_sections(sections: Sequence[_Section]) -> list[list[_Section]]:
+    """Group consecutive sections by their first-level heading."""
+
+    groups: list[list[_Section]] = []
+    current: list[_Section] = []
+    current_key: tuple[str, ...] | None = None
+
+    for section in sections:
+        key = section.heading_path[:1]
+        if current and key != current_key:
+            groups.append(current)
+            current = []
+        if not current:
+            current_key = key
+        current.append(section)
+
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _heading_piece(block: _Block) -> _Piece:
+    level = len(block.text) - len(block.text.lstrip("#"))
+    return _Piece(
+        text=_heading_line(block.heading_path, level),
+        heading_path=block.heading_path,
+        start=block.start,
+        end=block.end,
+        block_type="heading",
+    )
+
+
+def _heading_line(heading_path: Sequence[str], level: int = 1) -> str:
+    if not heading_path:
+        return ""
+    return "#" * max(1, min(level, 6)) + " " + " > ".join(heading_path)
+
+
+def _chunk_text(pieces: Sequence[_Piece]) -> str:
+    body = "\n\n".join(piece.text for piece in pieces)
+    if pieces and pieces[0].block_type != "heading":
+        prefix = _heading_prefix(pieces[0].heading_path)
+        if prefix:
+            return prefix + body
+    return body
+
+
+def _distinct_paths(pieces: Sequence[_Piece]) -> tuple[str, ...]:
+    paths: list[str] = []
+    for piece in pieces:
+        joined = " > ".join(piece.heading_path)
+        if joined and joined not in paths:
+            paths.append(joined)
+    return tuple(paths)
 
 
 def _heading_prefix(heading_path: Sequence[str]) -> str:
@@ -307,8 +422,14 @@ def _is_table_separator(line: str) -> bool:
     return "|" in line and "-" in line and bool(_TABLE_SEPARATOR_RE.match(line))
 
 
+def _has_body(pieces: Sequence[_Piece]) -> bool:
+    return any(piece.block_type != "heading" for piece in pieces)
+
+
 def _combined_type(pieces: Sequence[_Piece]) -> str:
-    types = {piece.block_type for piece in pieces}
+    types = {piece.block_type for piece in pieces if piece.block_type != "heading"}
+    if not types:
+        return "heading"
     return types.pop() if len(types) == 1 else "mixed"
 
 
