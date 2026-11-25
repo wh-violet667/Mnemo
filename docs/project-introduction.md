@@ -3,6 +3,7 @@
 > 项目：Mnemo —— 基于知识库与长期记忆的个性化问答助手
 > 技术栈：FastAPI + LangGraph + Milvus + PostgreSQL + Redis + Streamlit
 > 文档定位：课程项目介绍、答辩讲稿底稿、老师追问准备
+> 完整架构与二次开发文档：[architecture.md](architecture.md)
 
 ---
 
