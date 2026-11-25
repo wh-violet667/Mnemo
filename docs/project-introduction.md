@@ -9,6 +9,8 @@
 
 ## 0. 一页速览
 
+> 完整架构与二次开发文档：[architecture.md](architecture.md)。
+
 ### 一句话介绍
 
 Mnemo 是一个面向个人/小团队知识库的 RAG 问答系统：文档经过父子块切分和向量化后进入 Milvus，用户提问时通过 hybrid 检索、rerank 和 LangGraph Agent 生成带证据引用的回答；同时把历史对话压缩成可版本化、可追溯来源的长期记忆，保存在 PostgreSQL，并投影到 Milvus 供语义召回。
